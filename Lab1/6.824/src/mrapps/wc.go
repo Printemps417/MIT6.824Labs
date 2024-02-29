@@ -28,6 +28,7 @@ func Map(filename string, contents string) []mr.KeyValue {
 	kva := []mr.KeyValue{}
 	for _, w := range words {
 		kv := mr.KeyValue{w, "1"}
+		//将kv对追加到数组中
 		kva = append(kva, kv)
 	}
 	return kva
@@ -38,7 +39,8 @@ func Map(filename string, contents string) []mr.KeyValue {
 // map tasks, with a list of all the values created for that key by
 // any map task.
 //
-func Reduce(key string, values []string) string {
+func Reduce(key string, values []string) string
+{
 	// return the number of occurrences of this word.
 	return strconv.Itoa(len(values))
 }
