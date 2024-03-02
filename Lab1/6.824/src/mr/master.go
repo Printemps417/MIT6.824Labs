@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// master工作状态：闲置，进行中，完成
 type MasterTaskStatus int
 
 const (
@@ -18,6 +19,7 @@ const (
 	Completed
 )
 
+// worker工作状态：map，reduce，exit，wait
 type State int
 
 const (
@@ -27,15 +29,7 @@ const (
 	Wait
 )
 
-type Master struct {
-	TaskQueue     chan *Task          // 等待执行的task
-	TaskInfo      map[int]*MasterTask // 当前所有task的信息
-	MasterPhase   State               // Master的阶段
-	NReduce       int
-	InputFiles    []string
-	Intermediates [][]string // Map任务产生的R个中间文件的信息
-}
-
+// master工作的信息
 type MasterTask struct {
 	TaskStatus    MasterTaskStatus
 	StartTime     time.Time
@@ -49,6 +43,15 @@ type Task struct {
 	TaskNumber    int
 	Intermediates []string
 	Output        string
+}
+
+type Master struct {
+	TaskQueue     chan *Task          // 等待执行的task队列
+	TaskInfo      map[int]*MasterTask // 当前所有task的信息
+	MasterPhase   State               // Master的阶段
+	NReduce       int
+	InputFiles    []string
+	Intermediates [][]string // Map任务产生的R个中间文件的信息
 }
 
 var mu sync.Mutex
@@ -81,9 +84,7 @@ func (m *Master) server() {
 // if the entire job has finished.
 func (m *Master) Done() bool {
 	ret := false
-
 	// Your code here.
-
 	return ret
 }
 
@@ -115,13 +116,14 @@ func MakeMaster(files []string, nReduce int) *Master {
 }
 func (m *Master) catchTimeOut() {
 	for {
-		time.Sleep(5 * time.Second)
+		time.Sleep(1 * time.Second)
 		mu.Lock()
 		if m.MasterPhase == Exit {
 			mu.Unlock()
 			return
 		}
-		for _, masterTask := range m.TaskMeta {
+		for _, masterTask := range m.TaskInfo {
+			//超时判定。如果超时则将任务取回并闲置
 			if masterTask.TaskStatus == InProgress && time.Now().Sub(masterTask.StartTime) > 10*time.Second {
 				m.TaskQueue <- masterTask.TaskReference
 				masterTask.TaskStatus = Idle
@@ -131,36 +133,38 @@ func (m *Master) catchTimeOut() {
 	}
 }
 
+// 创建master时就创建MapTask
 func (m *Master) createMapTask() {
 	// 根据传入的filename，每个文件对应一个map task
 	for idx, filename := range m.InputFiles {
-		taskMeta := Task{
+		//创建新Task
+		NewTask := Task{
 			Input:      filename,
 			TaskState:  Map,
 			NReducer:   m.NReduce,
 			TaskNumber: idx,
 		}
-		m.TaskQueue <- &taskMeta
-		m.TaskMeta[idx] = &MasterTask{
+		m.TaskQueue <- &NewTask
+		m.TaskInfo[idx] = &MasterTask{
 			TaskStatus:    Idle,
-			TaskReference: &taskMeta,
+			TaskReference: &NewTask,
 		}
 	}
 }
 
 func (m *Master) createReduceTask() {
-	m.TaskMeta = make(map[int]*MasterTask)
+	m.TaskInfo = make(map[int]*MasterTask)
 	for idx, files := range m.Intermediates {
-		taskMeta := Task{
+		TaskInfo := Task{
 			TaskState:     Reduce,
 			NReducer:      m.NReduce,
 			TaskNumber:    idx,
 			Intermediates: files,
 		}
-		m.TaskQueue <- &taskMeta
-		m.TaskMeta[idx] = &MasterTask{
+		m.TaskQueue <- &TaskInfo
+		m.TaskInfo[idx] = &MasterTask{
 			TaskStatus:    Idle,
-			TaskReference: &taskMeta,
+			TaskReference: &TaskInfo,
 		}
 	}
 }
@@ -178,12 +182,13 @@ func (m *Master) AssignTask(args *ExampleArgs, reply *Task) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(m.TaskQueue) > 0 {
-		//有就发出去
+		//若任务队列不空，则将reply指向任务结构
 		*reply = *<-m.TaskQueue
 		// 记录task的启动时间
-		m.TaskMeta[reply.TaskNumber].TaskStatus = InProgress
-		m.TaskMeta[reply.TaskNumber].StartTime = time.Now()
+		m.TaskInfo[reply.TaskNumber].TaskStatus = InProgress
+		m.TaskInfo[reply.TaskNumber].StartTime = time.Now()
 	} else if m.MasterPhase == Exit {
+		//master已退出，返回空任务
 		*reply = Task{TaskState: Exit}
 	} else {
 		// 没有task就让worker 等待
@@ -196,11 +201,11 @@ func (m *Master) TaskCompleted(task *Task, reply *ExampleReply) error {
 	//更新task状态
 	mu.Lock()
 	defer mu.Unlock()
-	if task.TaskState != m.MasterPhase || m.TaskMeta[task.TaskNumber].TaskStatus == Completed {
+	if task.TaskState != m.MasterPhase || m.TaskInfo[task.TaskNumber].TaskStatus == Completed {
 		// 因为worker写在同一个文件磁盘上，对于重复的结果要丢弃
 		return nil
 	}
-	m.TaskMeta[task.TaskNumber].TaskStatus = Completed
+	m.TaskInfo[task.TaskNumber].TaskStatus = Completed
 	go m.processTaskResult(task)
 	return nil
 }
@@ -228,7 +233,7 @@ func (m *Master) processTaskResult(task *Task) {
 }
 
 func (m *Master) allTaskDone() bool {
-	for _, task := range m.TaskMeta {
+	for _, task := range m.TaskInfo {
 		if task.TaskStatus != Completed {
 			return false
 		}

@@ -176,6 +176,7 @@ func readFromLocalFile(files []string) *[]KeyValue {
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := masterSock()
+	//建立连接
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
 		// Master结束进程，退出worker
