@@ -37,7 +37,7 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-	// 启动worker
+	// 启动worker.循环请求任务
 	for {
 		// worker从master获取任务
 		task := getTask()
@@ -57,40 +57,12 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	}
 }
 
-func reducer(task *Task, reducef func(string, []string) string) {
-	//先从filepath读取intermediate的KeyValue
-	intermediate := *readFromLocalFile(task.Intermediates)
-	//根据kv排序
-	sort.Sort(ByKey(intermediate))
-
-	dir, _ := os.Getwd()
-	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
-	if err != nil {
-		log.Fatal("Failed to create temp file", err)
-	}
-	// 这部分代码修改自mrsequential.go
-	i := 0
-	for i < len(intermediate) {
-		//将相同的key放在一起分组合并
-		j := i + 1
-		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
-			j++
-		}
-		values := []string{}
-		for k := i; k < j; k++ {
-			values = append(values, intermediate[k].Value)
-		}
-		//交给reducef，拿到结果
-		output := reducef(intermediate[i].Key, values)
-		//写到对应的output文件
-		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
-		i = j
-	}
-	tempFile.Close()
-	oname := fmt.Sprintf("mr-out-%d", task.TaskNumber)
-	os.Rename(tempFile.Name(), oname)
-	task.Output = oname
-	TaskCompleted(task)
+func getTask() Task {
+	// worker从master获取任务
+	args := ExampleArgs{}
+	reply := Task{}
+	call("Master.AssignTask", &args, &reply)
+	return reply
 }
 
 func mapper(task *Task, mapf func(string, string) []KeyValue) {
@@ -99,7 +71,7 @@ func mapper(task *Task, mapf func(string, string) []KeyValue) {
 	if err != nil {
 		log.Fatal("Failed to read file: "+task.Input, err)
 	}
-	//将content交给mapf，缓存结果
+	//将content交给mapf，intermediates为当前mapper的缓存结果
 	intermediates := mapf(task.Input, string(content))
 
 	//缓存后的结果会写到本地磁盘，并切成R份
@@ -118,22 +90,54 @@ func mapper(task *Task, mapf func(string, string) []KeyValue) {
 	TaskCompleted(task)
 }
 
-func getTask() Task {
-	// worker从master获取任务
-	args := ExampleArgs{}
-	reply := Task{}
-	call("Master.AssignTask", &args, &reply)
-	return reply
+func reducer(task *Task, reducef func(string, []string) string) {
+	//先从filepath读取intermediate的KeyValue
+	intermediate := *readFromLocalFile(task.Intermediates)
+
+	//根据kv排序
+	sort.Sort(ByKey(intermediate))
+
+	dir, _ := os.Getwd()
+	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	if err != nil {
+		log.Fatal("Failed to create temp file", err)
+	}
+	// 改自mrsequential.go
+	i := 0
+	for i < len(intermediate) {
+		//将相同的key放在一起分组合并
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		//交给reducef，拿到结果
+		output := reducef(intermediate[i].Key, values)
+		//写到对应的output文件
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
+		i = j
+	}
+	//数据完全写入磁盘后关闭磁盘
+	tempFile.Close()
+	oname := fmt.Sprintf("mr-out-%d", task.TaskNumber)
+	os.Rename(tempFile.Name(), oname)
+	task.Output = oname
+	TaskCompleted(task)
 }
 
 func TaskCompleted(task *Task) {
 	//通过RPC，把task信息发给master
 	reply := ExampleReply{}
+	//rpc调用任务完成函数
 	call("Master.TaskCompleted", task, &reply)
 }
 
 func writeToLocalFile(x int, y int, kvs *[]KeyValue) string {
 	dir, _ := os.Getwd()
+	//使用TempFile创建临时文件,用*生成一个唯一的临时文件名
 	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
 	if err != nil {
 		log.Fatal("Failed to create temp file", err)
