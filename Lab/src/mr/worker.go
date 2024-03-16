@@ -122,7 +122,7 @@ func reducer(task *Task, reducef func(string, []string) string) {
 	}
 	//数据完全写入磁盘后关闭磁盘
 	tempFile.Close()
-	oname := fmt.Sprintf("/mr-tmp/mr-out-%d", task.TaskNumber)
+	oname := fmt.Sprintf("mr-out-%d", task.TaskNumber)
 	os.Rename(tempFile.Name(), oname)
 	task.Output = oname
 	TaskCompleted(task)
