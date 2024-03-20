@@ -37,7 +37,12 @@ func (a byTime) Swap(i, j int) {
 }
 
 func (a byTime) Less(i, j int) bool {
-	return a[i].time < a[j].time
+	if a[i].time != a[j].time {
+		return a[i].time < a[j].time
+	}
+	// if the timestamps are the same, we need to make sure we order calls
+	// before returns
+	return a[i].kind == callEntry && a[j].kind == returnEntry
 }
 
 func makeEntries(history []Operation) []entry {
@@ -322,7 +327,7 @@ loop:
 					set[v] = struct{}{}
 				}
 			}
-			for k, _ := range set {
+			for k := range set {
 				arr := make([]int, len(*k))
 				for i, v := range *k {
 					arr[i] = v

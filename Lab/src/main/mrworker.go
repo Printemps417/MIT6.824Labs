@@ -2,15 +2,15 @@ package main
 
 //
 // start a worker process, which is implemented
-// in 6.824/src/mr/worker.go. typically there will be
-// multiple worker processes, talking to one master.
+// in ../mr/worker.go. typically there will be
+// multiple worker processes, talking to one coordinator.
 //
 // go run mrworker.go wc.so
 //
 // Please do not change this file.
 //
 
-import "6.824/src/mr"
+import "6.824/mr"
 import "plugin"
 import "os"
 import "fmt"
@@ -22,14 +22,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	//从mrapps中加载mapf和reducef
 	mapf, reducef := loadPlugin(os.Args[1])
 
 	mr.Worker(mapf, reducef)
 }
 
+//
 // load the application Map and Reduce functions
-// from a plugin file, e.g. 6.824/src/mrapps/wc.soc
+// from a plugin file, e.g. ../mrapps/wc.so
+//
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {
 	p, err := plugin.Open(filename)
 	if err != nil {

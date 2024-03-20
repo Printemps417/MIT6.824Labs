@@ -193,7 +193,7 @@ func readFromLocalFile(files []string) *[]KeyValue {
 // returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := masterSock()
+	sockname := coordinatorSock()
 	//建立连接
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
