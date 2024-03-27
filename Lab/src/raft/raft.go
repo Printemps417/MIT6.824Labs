@@ -19,18 +19,14 @@ package raft
 
 import (
 	"6.824/labgob"
+	"6.824/labrpc"
 	"bytes"
 	"fmt"
 	"log"
 	"strings"
-
-	//	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	//	"6.824/labgob"
-	"6.824/labrpc"
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -224,7 +220,15 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-
+		time.Sleep(rf.heartBeat)
+		rf.mu.Lock()
+		if rf.state == Leader {
+			rf.appendEntries(true)
+		}
+		if time.Now().After(rf.electionTime) {
+			rf.leaderElection()
+		}
+		rf.mu.Unlock()
 	}
 }
 func (rf *Raft) apply() {
