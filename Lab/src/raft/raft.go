@@ -20,7 +20,10 @@ package raft
 import (
 	"6.824/labgob"
 	"bytes"
+	"fmt"
 	"log"
+	"strings"
+
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -121,6 +124,11 @@ func (rf *Raft) persist() {
 }
 
 // restore previously persisted state.
+// readPersist方法用于恢复之前持久化的状态。
+// 如果数据为空或长度小于1（即没有任何状态），则不进行任何操作。
+// 否则，将使用labgob的解码器从字节数据中解码出currentTerm（当前任期）、voteFor（投票给谁）和logs（日志）。
+// 如果在解码过程中出现错误，将记录致命错误并停止程序。
+// 如果解码成功，将恢复Raft实例的currentTerm、votedFor和logs状态。
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
@@ -163,8 +171,25 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state != Leader {
+		return -1, rf.currentTerm, false
+	}
+
+	index := rf.logs.lastLog().Index + 1
+	term := rf.currentTerm
+
+	log := Entry{
+		Command: command,
+		Index:   index,
+		Term:    term,
+	}
+	rf.logs.append(log)
+	rf.persist()
+	DPrintf("[%v] :TERM:%v START:%v", rf.me, term, log)
+	rf.appendEntries(false)
+
 	isLeader := true
 
 	// Your code here (2B).
@@ -201,6 +226,34 @@ func (rf *Raft) ticker() {
 		// time.Sleep().
 
 	}
+}
+func (rf *Raft) apply() {
+	rf.applyCond.Broadcast()
+	DPrintf("[%v]: rf.applyCond.Broadcast()", rf.me)
+}
+
+func (rf *Raft) applier() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	for !rf.killed() {
+		if rf.commitIndex > rf.lastApplied && rf.logs.lastLog().Index > rf.lastApplied {
+			rf.lastApplied++
+			applyMsg := ApplyMsg{
+				CommandValid: true,
+				Command:      rf.logs.at(rf.lastApplied).Command,
+				CommandIndex: rf.lastApplied,
+			}
+			DPrintf("[%v]: COMMIT %d: %v", rf.me, rf.lastApplied, rf.commits())
+		}
+	}
+}
+func (rf *Raft) commits() string {
+	nums := []string{}
+	for i := 0; i <= rf.lastApplied; i++ {
+		nums = append(nums, fmt.Sprintf("%4d", rf.logs.at(i).Command))
+	}
+	return fmt.Sprint(strings.Join(nums, "|"))
 }
 
 // the service or tester wants to create a Raft server. the ports
