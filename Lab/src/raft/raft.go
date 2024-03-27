@@ -245,6 +245,12 @@ func (rf *Raft) applier() {
 				CommandIndex: rf.lastApplied,
 			}
 			DPrintf("[%v]: COMMIT %d: %v", rf.me, rf.lastApplied, rf.commits())
+			rf.mu.Unlock()
+			rf.applyCh <- applyMsg
+			rf.mu.Lock()
+		} else {
+			rf.applyCond.Wait()
+			DPrintf("[%v]: rf.applyCond.Wait()", rf.me)
 		}
 	}
 }
@@ -273,12 +279,28 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.state = Follower
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.heartBeat = 50 * time.Millisecond
+	rf.resetElectionTimer()
+
+	rf.logs = makeEmptyLog()
+	rf.logs.append(Entry{-1, 0, 0})
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+
+	rf.applyCh = applyCh
+	rf.applyCond = sync.NewCond(&rf.mu)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.applier()
 
 	return rf
 }
