@@ -21,31 +21,43 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) appendEntries(heartbeat bool) {
+	//添加日志or心跳
+	// 获取最后一条日志
 	lastLog := rf.logs.lastLog()
+	// 遍历所有的服务器
 	for peer, _ := range rf.peers {
+		// 如果服务器是自己
 		if peer == rf.me {
+			// 发送心跳后重置选举定时器
 			rf.resetElectionTimer()
 			continue
 		}
-		//规则3
+		// 如果最后一条日志的索引大于或等于下一个索引，或者是心跳
 		if lastLog.Index >= rf.nextIndex[peer] || heartbeat {
+			// 获取下一个索引
 			nextIndex := rf.nextIndex[peer]
+			// 如果下一个索引小于或等于0，那么设置下一个索引为1
 			if nextIndex <= 0 {
 				nextIndex = 1
 			}
+			// 如果最后一条日志的索引+1小于下一个索引，那么设置下一个索引为最后一条日志的索引
 			if lastLog.Index+1 < nextIndex {
 				nextIndex = lastLog.Index
 			}
+			// 获取前一条日志
 			prevLog := rf.logs.at(nextIndex - 1)
+			// 初始化附加日志条目请求的参数
 			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: prevLog.Index,
-				PrevLogTerm:  prevLog.Term,
-				Entries:      make([]Entry, lastLog.Index-nextIndex+1),
-				LeaderCommit: rf.commitIndex,
+				Term:         rf.currentTerm,                           // 当前任期
+				LeaderId:     rf.me,                                    // 领导者ID
+				PrevLogIndex: prevLog.Index,                            // 前一条日志的索引
+				PrevLogTerm:  prevLog.Term,                             // 前一条日志的任期
+				Entries:      make([]Entry, lastLog.Index-nextIndex+1), // 日志条目
+				LeaderCommit: rf.commitIndex,                           // 领导者的commitIndex
 			}
+			// 复制日志条目
 			copy(args.Entries, rf.logs.slice(nextIndex))
+			// 启动一个新的goroutine来处理领导者发送日志条目的逻辑
 			go rf.leaderSendEntries(peer, &args)
 		}
 	}

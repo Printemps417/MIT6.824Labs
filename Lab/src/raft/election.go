@@ -47,7 +47,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// 获取当前服务器的最后一条日志
 	myLastLog := rf.logs.lastLog()
-	// 判断请求投票的服务器的最后一条日志是否比当前服务器的最后一条日志更新
+	// uptodate判断是否进行更新
+	// 判断请求投票的服务器的任期更大or最后一条日志是否比当前服务器的最后一条日志更新
 	upToDate := args.LastLogTerm > myLastLog.Term ||
 		(args.LastLogTerm == myLastLog.Term && args.LastLogIndex >= myLastLog.Index)
 	// 如果当前服务器还没有投票或者已经投给了请求投票的服务器，并且请求投票的服务器的最后一条日志比当前服务器的最后一条日志更新
@@ -60,7 +61,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.persist()
 		// 重置选举定时器
 		rf.resetElectionTimer()
-		// 打印调试信息
+		// 打印调试信息。当前server索引，任期与投票
 		DPrintf("[%v]: term %v vote %v", rf.me, rf.currentTerm, rf.votedFor)
 	} else {
 		// 否则不投票给请求投票的服务器
@@ -102,7 +103,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-// candidateRequestVote方法用于处理候选人请求投票的逻辑。
+// candidateRequestVote方法用于处理候选人请求投票的逻辑。调用的server向serverId的服务器请求投票
 // serverId是目标服务器的索引，args是请求投票的参数，becomeLeader是一个sync.Once对象，用于确保某个操作只执行一次，voteCounter是投票计数器。
 func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, becomeLeader *sync.Once, voteCounter *int) {
 	// 打印调试信息，显示发送投票请求
@@ -145,7 +146,7 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, become
 		rf.state == Candidate {
 		// 打印调试信息，显示获得多数投票
 		DPrintf("[%d]: 获得多数选票，可以提前结束\n", rf.me)
-		// 执行一次成为领导者的操作
+		// 执行一次成为领导者的操作。sync.Once对象的Do方法确保只执行一次
 		becomeLeader.Do(func() {
 			// 打印调试信息，显示当前任期结束
 			DPrintf("[%d]: 当前term %d 结束\n", rf.me, rf.currentTerm)
@@ -155,12 +156,13 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, become
 			lastLogIndex := rf.logs.lastLog().Index
 			// 更新nextIndex和matchIndex
 			for i, _ := range rf.peers {
+				//当新的领导者产生时，初始化所有的nextIndex为最后一条日志的索引加一，初始化所有的matchIndex为0
 				rf.nextIndex[i] = lastLogIndex + 1
 				rf.matchIndex[i] = 0
 			}
 			// 打印调试信息，显示领导者的nextIndex
 			DPrintf("[%d]: leader - nextIndex %#v", rf.me, rf.nextIndex)
-			// 发送附加日志条目请求
+			// 发送附加日志条目请求。2B的内容
 			rf.appendEntries(true)
 		})
 	}
@@ -183,6 +185,7 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, become
 func (rf *Raft) resetElectionTimer() {
 	t := time.Now()
 	electionTimeout := time.Duration(150+rand.Intn(150)) * time.Millisecond
+	//将竞选时间推后150+随机数150毫秒
 	rf.electionTime = t.Add(electionTimeout)
 }
 
