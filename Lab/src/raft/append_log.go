@@ -21,7 +21,7 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) appendEntries(heartbeat bool) {
-	//添加日志or心跳
+	//在领导者服务器上被调用，用于向所有的追随者发送日志条目or心跳
 	// 获取最后一条日志
 	lastLog := rf.logs.lastLog()
 	// 遍历所有的服务器
@@ -63,7 +63,9 @@ func (rf *Raft) appendEntries(heartbeat bool) {
 	}
 }
 func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
+	// 向指定的服务器serverId发送附加日志条目请求
 	var reply AppendEntriesReply
+	//RPC调用，使远程服务器接收领导者发送的日志条目
 	ok := rf.sendAppendEntries(serverId, args, &reply)
 	if !ok {
 		return
@@ -71,40 +73,48 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if reply.Term > rf.currentTerm {
+		// 回复的任期大于当前任期
 		rf.setNewTerm(reply.Term)
 		return
 	}
 	if args.Term == rf.currentTerm {
+		// 请求的任期等于当前任期
 		// rules for leader 3.1
 		if reply.Success {
-			match := args.PrevLogIndex + len(args.Entries)
-			next := match + 1
-			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)
-			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match)
+			match := args.PrevLogIndex + len(args.Entries)                // 计算匹配的日志条目索引
+			next := match + 1                                             // 计算下一个日志条目的索引
+			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新nextIndex
+			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新matchIndex
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
 			if reply.XTerm == -1 {
+				// 如果冲突的日志条目的任期为-1
 				rf.nextIndex[serverId] = reply.XLen
 			} else {
-				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm)
+				// 冲突的日志条目的任期不为-1
+				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm) // 查找冲突的日志条目的任期的最后一个日志条目
 				DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
 				if lastLogInXTerm > 0 {
+					// 如果找到了冲突的日志条目的任期的最后一个日志条目，设置nextIndex为冲突的日志条目的任期的最后一个日志条目的索引
 					rf.nextIndex[serverId] = lastLogInXTerm
 				} else {
+					// 如果没有找到冲突的日志条目的任期的最后一个日志条目，设置nextIndex为冲突的日志条目的索引
 					rf.nextIndex[serverId] = reply.XIndex
 				}
 			}
 
 			DPrintf("[%v]: leader nextIndex[%v] %v", rf.me, serverId, rf.nextIndex[serverId])
 		} else if rf.nextIndex[serverId] > 1 {
+			// 如果nextIndex大于1，将nextIndex减1
 			rf.nextIndex[serverId]--
 		}
-		rf.leaderCommitRule()
+		rf.leaderCommitRule() // 执行领导者提交
 	}
 }
 
 func (rf *Raft) findLastLogInTerm(x int) int {
+	//查找给定任期（term）的最后一个日志条目的索引
 	for i := rf.logs.lastLog().Index; i > 0; i-- {
 		term := rf.logs.at(i).Term
 		if term == x {
@@ -117,30 +127,44 @@ func (rf *Raft) findLastLogInTerm(x int) int {
 }
 
 func (rf *Raft) leaderCommitRule() {
-	// leader rule 4
+	// 领导者规则4：
+	//If there exists an N such that N > commitIndex,
+	//a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+	//set commitIndex = N (§5.3, §5.4).
 	if rf.state != Leader {
+		// 如果当前状态不是领导者，直接返回
 		return
 	}
 
 	for n := rf.commitIndex + 1; n <= rf.logs.lastLog().Index; n++ {
+		// 从commitIndex+1开始，遍历到最后一条日志的索引
 		if rf.logs.at(n).Term != rf.currentTerm {
+			// 如果日志的任期不等于当前任期，跳过当前循环
 			continue
 		}
-		counter := 1
+		counter := 1 // 初始化计数器
 		for serverId := 0; serverId < len(rf.peers); serverId++ {
 			if serverId != rf.me && rf.matchIndex[serverId] >= n {
+				// 服务器不是自己且matchIndex大于或等于n，计数器加1
 				counter++
 			}
 			if counter > len(rf.peers)/2 {
+				// 如果计数器大于服务器数量的一半
 				rf.commitIndex = n
 				DPrintf("[%v] leader尝试提交 index %v", rf.me, rf.commitIndex)
+				// 领导者提交的索引
 				rf.apply()
+				// 应用日志条目
 				break
 			}
 		}
 	}
 }
 
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -209,9 +233,4 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.apply()
 	}
 	reply.Success = true
-}
-
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
 }
