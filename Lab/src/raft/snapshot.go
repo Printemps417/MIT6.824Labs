@@ -1,62 +1,78 @@
 package raft
 
-import (
-	"log"
-	"time"
-)
+import "time"
 
 type InstallSnapshotArgs struct {
 	Term              int
 	LeaderId          int
 	LastIncludedIndex int
 	LastIncludedTerm  int
-	Data              []byte
+	//Offset            int
+	Data []byte
+	//Done bool
 }
 
 type InstallSnapshotReply struct {
 	Term int
 }
 
-// A service wants to switch to snapshot.  Only do so if Raft hasn't
-// have more recent info since it communicate the snapshot on applyCh.
-func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-
-	// Your code here (2D).
-
-	return true
-}
-
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(logIndex int, snapshotData []byte) {
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
-	DPrintf("savePs get logindex:%d", logIndex)
 	defer rf.mu.Unlock()
 
-	if logIndex <= rf.lastSnapshotIndex {
+	reply.Term = rf.currentTerm
+	if rf.currentTerm > args.Term {
 		return
 	}
 
-	if logIndex > rf.commitIndex {
-		panic("logindex > rf.commitdex")
+	if args.Term > rf.currentTerm || rf.state != Follower {
+		rf.state = Follower
+		rf.votedFor = -1
+		rf.currentTerm = args.Term
+		rf.resetElectionTimer()
+		rf.persist()
 	}
 
-	// TODO
-	DPrintf("before savePS, logindex:%d, lastspindex:%d, logslen:%d, logs:%+v", logIndex, rf.lastSnapshotIndex, rf.logs.len(), rf.logs.String())
-	// logindex 一定在 raft.logEntries 中存在
-	lastLog := rf.logs.at(logIndex)
-	rf.logs.Entries = rf.logs.Entries[rf.getRealIdxByLogIndex(logIndex):]
-	rf.lastSnapshotIndex = logIndex
-	rf.lastSnapshotTerm = lastLog.Term
-	persistData := rf.getPersistData()
-	rf.persister.SaveStateAndSnapshot(persistData, snapshotData)
+	//如果自身快照包含的最后一个日志>=leader快照包含的最后一个日志，就没必要接受了
+	if rf.lastSnapshotIndex >= args.LastIncludedIndex {
+		return
+	}
+
+	/********以下内容和CondInstallSnapshot的操作是相同的，因为不知道为什么在lab4B中只要调用CondInstallSnapshot函数就会陷入阻塞，因此将操作逻辑复制到这里一份，lab4中就没有调用CondInstallSnapshot函数了***********/
+
+	lastIncludedIndex := args.LastIncludedIndex
+	lastIncludedTerm := args.LastIncludedTerm
+	_, lastIndex := rf.getLastLogTermAndIndex()
+	if lastIncludedIndex > lastIndex {
+		rf.logs = makeEmptyLog()
+	} else {
+		installLen := lastIncludedIndex - rf.lastSnapshotIndex
+		rf.logs.Entries = rf.logs.Entries[installLen:]
+		rf.logs.Entries[0].Command = nil
+	}
+	//0处是空日志，代表了快照日志的标记
+	rf.logs.Entries[0].Term = lastIncludedTerm
+
+	rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
+	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
+	//保存快照和状态
+	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), args.Data)
+
+	/***********************************/
+
+	//接收发来的快照，并提交一个命令处理
+	rf.applyCh <- ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      args.Data,
+		SnapshotTerm:  args.LastIncludedTerm,
+		SnapshotIndex: args.LastIncludedIndex,
+	}
+
 }
 
-func (rf *Raft) sendInstallSnapshot(peerIdx int) {
+// 向指定节点发送快照
+func (rf *Raft) sendInstallSnapshotToPeer(server int) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	args := InstallSnapshotArgs{
 		Term:              rf.currentTerm,
 		LeaderId:          rf.me,
@@ -64,102 +80,57 @@ func (rf *Raft) sendInstallSnapshot(peerIdx int) {
 		LastIncludedTerm:  rf.lastSnapshotTerm,
 		Data:              rf.persister.ReadSnapshot(),
 	}
+	rf.mu.Unlock()
+
 	timer := time.NewTimer(rf.rpcTimeout)
 	defer timer.Stop()
+	DPrintf("%v role: %v, send snapshot  to peer,%v,args = %+v", rf.me, rf.state, server, args)
 
 	for {
 		timer.Stop()
 		timer.Reset(rf.rpcTimeout)
-		okCh := make(chan bool, 1)
-		reply := InstallSnapshotReply{}
+
+		ch := make(chan bool, 1)
+		reply := &InstallSnapshotReply{}
 		go func() {
-			o := rf.peers[peerIdx].Call("Raft.InstallSnapshot", &args, &reply)
-			if !o {
+			ok := rf.peers[server].Call("Raft.InstallSnapshot", &args, reply)
+			if !ok {
 				time.Sleep(time.Millisecond * 10)
 			}
-			okCh <- o
+			ch <- ok
 		}()
 
-		ok := false
 		select {
 		case <-rf.stopCh:
 			return
 		case <-timer.C:
+			DPrintf("%v role: %v, send snapshot to peer %v TIME OUT!!!", rf.me, rf.state, server)
 			continue
-		case ok = <-okCh:
+		case ok := <-ch:
 			if !ok {
 				continue
 			}
 		}
 
-		// ok == true
-		DPrintf("send_install_snapshot")
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-		if rf.currentTerm != args.Term || rf.state != Leader {
+		if rf.state != Leader || args.Term != rf.currentTerm {
 			return
 		}
 		if reply.Term > rf.currentTerm {
 			rf.state = Follower
-			rf.resetElectionTimer()
 			rf.currentTerm = reply.Term
+			rf.resetElectionTimer()
 			rf.persist()
 			return
 		}
-		// success
-		if args.LastIncludedIndex > rf.matchIndex[peerIdx] {
-			rf.matchIndex[peerIdx] = args.LastIncludedIndex
+
+		if args.LastIncludedIndex > rf.matchIndex[server] {
+			rf.matchIndex[server] = args.LastIncludedIndex
 		}
-		if args.LastIncludedIndex+1 > rf.nextIndex[peerIdx] {
-			rf.nextIndex[peerIdx] = args.LastIncludedIndex + 1
+		if args.LastIncludedIndex+1 > rf.nextIndex[server] {
+			rf.nextIndex[server] = args.LastIncludedIndex + 1
 		}
 		return
-
-	}
-
-}
-
-func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
-	DPrintf("install_snapshot")
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	reply.Term = rf.currentTerm
-	if args.Term < rf.currentTerm {
-		return
-	}
-	if args.Term > rf.currentTerm || rf.state != Follower {
-		rf.currentTerm = args.Term
-		rf.state = Follower
-		rf.resetElectionTimer()
-		defer rf.persist()
-	}
-
-	if rf.lastSnapshotIndex >= args.LastIncludedIndex {
-		return
-	}
-	// success
-	start := args.LastIncludedIndex - rf.lastSnapshotIndex
-	if start < 0 {
-		// 不可能
-		log.Fatal("install sn")
-	} else if start >= rf.logs.len() {
-		rf.logs = makeEmptyLog()
-		rf.logs.Entries[0].Term = args.LastIncludedTerm
-		rf.logs.Entries[0].Index = args.LastIncludedTerm
-	} else {
-		rf.logs.Entries = rf.logs.Entries[start:]
-	}
-
-	rf.lastSnapshotIndex = args.LastIncludedIndex
-	rf.lastSnapshotTerm = args.LastIncludedTerm
-	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), args.Data)
-}
-func (rf *Raft) getRealIdxByLogIndex(logIndex int) int {
-	idx := logIndex - rf.lastSnapshotIndex
-	if idx < 0 {
-		return -1
-	} else {
-		return idx
 	}
 }
