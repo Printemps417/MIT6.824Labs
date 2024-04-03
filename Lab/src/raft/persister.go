@@ -83,15 +83,22 @@ func (ps *Persister) SnapshotSize() int {
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
-func (rf *Raft) persist() {
-	DPrintf("[%v] :STATE:%v", rf.me, rf.logs.String())
-	// Example:
+func (rf *Raft) getPersistData() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
+	e.Encode(rf.commitIndex)
+	e.Encode(rf.lastSnapshotIndex)
+	e.Encode(rf.lastSnapshotTerm)
 	e.Encode(rf.logs)
 	data := w.Bytes()
+	return data
+}
+
+func (rf *Raft) persist() {
+	DPrintf("[%v] :STATE:%v", rf.me, rf.logs.String())
+	data := rf.getPersistData()
 	rf.persister.SaveRaftState(data)
 }
 
@@ -112,9 +119,13 @@ func (rf *Raft) readPersist(data []byte) {
 	var currentTerm int
 	var voteFor int
 	var logs Log
+	var commitIndex, lastSnapshotIndex, lastSnapshotTerm int
 
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&voteFor) != nil ||
+		d.Decode(&commitIndex) != nil ||
+		d.Decode(&lastSnapshotIndex) != nil ||
+		d.Decode(&lastSnapshotTerm) != nil ||
 		d.Decode(&logs) != nil {
 		log.Fatal("failed to read persist\n")
 	} else {

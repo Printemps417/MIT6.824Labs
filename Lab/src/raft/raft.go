@@ -68,8 +68,10 @@ type Raft struct {
 
 	state         RaftState
 	appendEntryCh chan *Entry
-	heartBeat     time.Duration
-	electionTime  time.Time
+
+	heartBeat    time.Duration
+	electionTime time.Time
+	rpcTimeout   time.Duration
 
 	//所有服务器的持久性状态
 	currentTerm int
@@ -86,6 +88,10 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	lastSnapshotIndex int // 快照中的 index
+	lastSnapshotTerm  int
+	notifyApplyCh     chan struct{}
+	stopCh            chan struct{}
 }
 
 // return currentTerm and whether this server
@@ -226,6 +232,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.heartBeat = 50 * time.Millisecond
 	rf.resetElectionTimer()
+	rf.rpcTimeout = 100 * time.Millisecond
 
 	rf.logs = makeEmptyLog()
 	rf.logs.append(Entry{-1, 0, 0})
@@ -245,22 +252,4 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.applier()
 
 	return rf
-}
-
-// A service wants to switch to snapshot.  Only do so if Raft hasn't
-// have more recent info since it communicate the snapshot on applyCh.
-func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-
-	// Your code here (2D).
-
-	return true
-}
-
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
-
 }
