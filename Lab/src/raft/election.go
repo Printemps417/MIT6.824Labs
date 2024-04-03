@@ -162,8 +162,8 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, become
 			}
 			// 打印调试信息，显示领导者的nextIndex
 			DPrintf("[%d]: leader - nextIndex %#v", rf.me, rf.nextIndex)
-			// 发送附加日志条目请求。2B的内容
-			rf.appendEntries(true)
+			// 发送心跳。2B
+			rf.appendEntriesToPeers(true)
 		})
 	}
 }

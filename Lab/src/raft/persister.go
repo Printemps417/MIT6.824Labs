@@ -9,7 +9,12 @@ package raft
 // test with the original before submitting.
 //
 
-import "sync"
+import (
+	"6.824/labgob"
+	"bytes"
+	"log"
+	"sync"
+)
 
 type Persister struct {
 	mu        sync.Mutex
@@ -73,4 +78,48 @@ func (ps *Persister) SnapshotSize() int {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return len(ps.snapshot)
+}
+
+// save Raft's persistent state to stable storage,
+// where it can later be retrieved after a crash and restart.
+// see paper's Figure 2 for a description of what should be persistent.
+func (rf *Raft) persist() {
+	DPrintf("[%v] :STATE:%v", rf.me, rf.logs.String())
+	// Example:
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+}
+
+// restore previously persisted state.
+// readPersist方法用于恢复之前持久化的状态。
+// 如果数据为空或长度小于1（即没有任何状态），则不进行任何操作。
+// 否则，将使用labgob的解码器从字节数据中解码出currentTerm（当前任期）、voteFor（投票给谁）和logs（日志）。
+// 如果在解码过程中出现错误，将记录致命错误并停止程序。
+// 如果解码成功，将恢复Raft实例的currentTerm、votedFor和logs状态。
+func (rf *Raft) readPersist(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	// Your code here (2C).
+	// Example:
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var voteFor int
+	var logs Log
+
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&voteFor) != nil ||
+		d.Decode(&logs) != nil {
+		log.Fatal("failed to read persist\n")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = voteFor
+		rf.logs = logs
+	}
 }

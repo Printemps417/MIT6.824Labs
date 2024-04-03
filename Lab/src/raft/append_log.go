@@ -20,7 +20,7 @@ type AppendEntriesReply struct {
 	XLen     int
 }
 
-func (rf *Raft) appendEntries(heartbeat bool) {
+func (rf *Raft) appendEntriesToPeers(heartbeat bool) {
 	//在领导者服务器上被调用，用于向所有的追随者发送日志条目or心跳
 	// 获取最后一条日志
 	lastLog := rf.logs.lastLog()
