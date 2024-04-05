@@ -45,7 +45,7 @@ func (rf *Raft) appendEntriesToPeers(heartbeat bool) {
 				nextIndex = lastLog.Index
 			}
 			// 获取前一条日志
-			prevLog := rf.logs.at(nextIndex - 1)
+			prevLog := rf.logsat(nextIndex - 1)
 			// 初始化附加日志条目请求的参数
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,                           // 当前任期
@@ -88,25 +88,30 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
-			if reply.XTerm == -1 {
-				// 如果冲突的日志条目的任期为-1
-				rf.nextIndex[serverId] = reply.XLen
+			if rf.lastSnapshotIndex >= reply.XIndex {
+				//发送快照解决冲突
+				go rf.sendInstallSnapshotToPeer(serverId)
 			} else {
-				// 冲突的日志条目的任期不为-1
-				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm) // 查找冲突的日志条目的任期的最后一个日志条目
-				DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
-				if lastLogInXTerm > 0 {
-					// 如果找到了冲突的日志条目的任期的最后一个日志条目，设置nextIndex为冲突的日志条目的任期的最后一个日志条目的索引
-					rf.nextIndex[serverId] = lastLogInXTerm
+				if reply.XTerm == args.PrevLogTerm {
+					//任期相同: If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
+					if rf.nextIndex[serverId] > 1 {
+						rf.nextIndex[serverId]--
+					}
 				} else {
-					// 如果没有找到冲突的日志条目的任期的最后一个日志条目，设置nextIndex为冲突的日志条目的索引
-					rf.nextIndex[serverId] = reply.XIndex
+					// 任期不同，查找冲突的日志条目的任期的最后一个日志条目
+					lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm) // 查找冲突的日志条目的任期的最后一个日志条目
+					DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
+					if lastLogInXTerm > 0 {
+						// 如果找到，设置nextIndex为冲突的日志条目的任期的最后一个日志条目的索引
+						rf.nextIndex[serverId] = lastLogInXTerm
+					} else {
+						// 如果没有找到，设置nextIndex为冲突的日志条目的索引
+						rf.nextIndex[serverId] = reply.XIndex
+					}
 				}
 			}
-
 			DPrintf("[%v]: leader nextIndex[%v] %v", rf.me, serverId, rf.nextIndex[serverId])
 		} else if rf.nextIndex[serverId] > 1 {
-			// 如果nextIndex大于1，将nextIndex减1
 			rf.nextIndex[serverId]--
 		}
 		rf.leaderCommitRule() // 执行领导者提交
@@ -116,7 +121,7 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 func (rf *Raft) findLastLogInTerm(x int) int {
 	//查找给定任期（term）的最后一个日志条目的索引
 	for i := rf.logs.lastLog().Index; i > 0; i-- {
-		term := rf.logs.at(i).Term
+		term := rf.logsat(i).Term
 		if term == x {
 			return i
 		} else if term < x {
@@ -138,7 +143,7 @@ func (rf *Raft) leaderCommitRule() {
 
 	for n := rf.commitIndex + 1; n <= rf.logs.lastLog().Index; n++ {
 		// 从commitIndex+1开始，遍历到最后一条日志的索引
-		if rf.logs.at(n).Term != rf.currentTerm {
+		if rf.logsat(n).Term != rf.currentTerm {
 			// 如果日志的任期不等于当前任期，跳过当前循环
 			continue
 		}
@@ -166,71 +171,77 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	rf.mu.Lock()         // 加锁，防止并发操作
+	defer rf.mu.Unlock() // 函数结束时解锁
 	DPrintf("[%d]: (term %d) follower 收到 [%v] AppendEntries %v, prevIndex %v, prevTerm %v", rf.me, rf.currentTerm, args.LeaderId, args.Entries, args.PrevLogIndex, args.PrevLogTerm)
-	// rules for servers
-	// all servers 2
-	reply.Success = false
-	reply.Term = rf.currentTerm
+	// server rules
+	//  If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
+	reply.Success = false       // 默认回复的成功标志为false
+	reply.Term = rf.currentTerm // 设置回复的任期为当前任期
 	if args.Term > rf.currentTerm {
-		rf.setNewTerm(args.Term)
+		rf.setNewTerm(args.Term) // 如果请求的任期大于当前任期，更新当前任期
 		return
 	}
 
-	// append entries rpc 1
+	// 附加日志 rpc 1
 	if args.Term < rf.currentTerm {
-		return
+		return // 如果请求的任期小于当前任期，直接返回
 	}
-	rf.resetElectionTimer()
+	rf.resetElectionTimer() // 重置选举定时器
 
-	// candidate rule 3
+	// 候选人规则 3  If AppendEntries RPC received from new leader: convert to follower
 	if rf.state == Candidate {
-		rf.state = Follower
+		rf.state = Follower // 如果当前状态是候选人，转变为追随者
 	}
-	// append entries rpc 2
+
+	//日志追赶
+	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if rf.logs.lastLog().Index < args.PrevLogIndex {
-		reply.Conflict = true
-		reply.XTerm = -1
-		reply.XIndex = -1
-		reply.XLen = rf.logs.len()
+		reply.Conflict = true // 设置冲突标志为true
+		//reply.XTerm = -1           // 设置冲突的日志条目的任期为-1
+		//reply.XIndex = -1          // 设置冲突的日志条目的索引为-1
+		reply.XTerm, reply.XIndex = rf.logs.lastLog().Term, rf.logs.lastLog().Index
+		reply.XLen = rf.logs.len() // 设置冲突的日志条目的长度为日志的长度
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
 		return
 	}
-	if rf.logs.at(args.PrevLogIndex).Term != args.PrevLogTerm {
-		reply.Conflict = true
-		xTerm := rf.logs.at(args.PrevLogIndex).Term
+
+	//日志冲突
+	if rf.logsat(args.PrevLogIndex).Term != args.PrevLogTerm {
+		reply.Conflict = true                      // 设置冲突标志为true
+		xTerm := rf.logsat(args.PrevLogIndex).Term // 获取冲突的日志条目的任期
 		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
-			if rf.logs.at(xIndex-1).Term != xTerm {
-				reply.XIndex = xIndex
+			if rf.logsat(xIndex-1).Term != xTerm {
+				reply.XIndex = xIndex // 设置冲突的日志条目的索引
 				break
 			}
 		}
-		reply.XTerm = xTerm
-		reply.XLen = rf.logs.len()
+		reply.XTerm = xTerm        // 设置冲突的日志条目的任期
+		reply.XLen = rf.logs.len() // 设置冲突的日志条目的长度为日志的长度
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
 		return
 	}
 
+	//没冲突，reply.Conflict=false，正常追加日志
 	for idx, entry := range args.Entries {
-		// append entries rpc 3
-		if entry.Index <= rf.logs.lastLog().Index && rf.logs.at(entry.Index).Term != entry.Term {
-			rf.logs.truncate(entry.Index)
-			rf.persist()
+		// 附加日志 rpc 3  If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
+		if entry.Index <= rf.logs.lastLog().Index && rf.logsat(entry.Index).Term != entry.Term {
+			rf.logs.truncate(entry.Index) // 截断不同的日志
+			rf.persist()                  // 持久化日志
 		}
-		// append entries rpc 4
+		// 附加日志 rpc 4 Append any new entries not already in the log
 		if entry.Index > rf.logs.lastLog().Index {
-			rf.logs.append(args.Entries[idx:]...)
+			rf.logs.append(args.Entries[idx:]...) // 追加日志条目
 			DPrintf("[%d]: follower append [%v]", rf.me, args.Entries[idx:])
-			rf.persist()
+			rf.persist() // 持久化日志
 			break
 		}
 	}
 
-	// append entries rpc 5
+	// 附加日志 rpc 5 If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, rf.logs.lastLog().Index)
-		rf.apply()
+		rf.commitIndex = min(args.LeaderCommit, rf.logs.lastLog().Index) // 更新提交的索引
+		rf.apply()                                                       // 应用日志条目
 	}
-	reply.Success = true
+	reply.Success = true // 设置回复的成功标志为true
 }

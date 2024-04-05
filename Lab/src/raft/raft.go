@@ -189,7 +189,7 @@ func (rf *Raft) applier() {
 			rf.lastApplied++
 			applyMsg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.logs.at(rf.lastApplied).Command,
+				Command:      rf.logsat(rf.lastApplied).Command,
 				CommandIndex: rf.lastApplied,
 			}
 			DPrintf("[%v]: COMMIT %d: %v", rf.me, rf.lastApplied, rf.commits())
@@ -205,7 +205,7 @@ func (rf *Raft) applier() {
 func (rf *Raft) commits() string {
 	nums := []string{}
 	for i := 0; i <= rf.lastApplied; i++ {
-		nums = append(nums, fmt.Sprintf("%4d", rf.logs.at(i).Command))
+		nums = append(nums, fmt.Sprintf("%4d", rf.logsat(i).Command))
 	}
 	return fmt.Sprint(strings.Join(nums, "|"))
 }
@@ -320,7 +320,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // 返回当前状态机的最后一条日志的任期和索引
 // 索引是一直会增大的，但是我们的日志队列却不可能无限增大，在队列中下标0存储快照
 func (rf *Raft) getLastLogTermAndIndex() (int, int) {
-	return rf.logs.at(rf.logs.len() - 1).Term, rf.lastSnapshotIndex + rf.logs.len() - 1
+	//return rf.logs.lastLog().Term, rf.lastSnapshotIndex + rf.logs.len() - 1
+	return rf.logs.lastLog().Term, rf.logs.lastLog().Index
 }
 
 // 获取当前存储位置的索引
@@ -330,4 +331,7 @@ func (rf *Raft) getStoreIndexByLogIndex(logIndex int) int {
 		return -1
 	}
 	return storeIndex
+}
+func (rf *Raft) logsat(logIndex int) *Entry {
+	return rf.logs.at(rf.getStoreIndexByLogIndex(logIndex))
 }

@@ -124,7 +124,7 @@ func (rf *Raft) sendInstallSnapshotToPeer(server int) {
 			rf.persist()
 			return
 		}
-
+		//发送快照成功，更新matchindex和nextindex
 		if args.LastIncludedIndex > rf.matchIndex[server] {
 			rf.matchIndex[server] = args.LastIncludedIndex
 		}

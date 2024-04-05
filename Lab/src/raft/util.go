@@ -6,7 +6,7 @@ import (
 )
 
 // Debugging
-const Debug = false
+const Debug = true
 
 var (
 	//Debug bool
