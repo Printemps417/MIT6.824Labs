@@ -100,7 +100,7 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新nextIndex
 			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新matchIndex
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
-		} else {
+		} else if reply.Conflict {
 			//发生冲突
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
 			if rf.lastSnapshotIndex >= reply.XIndex {
@@ -161,15 +161,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.state = Follower // 如果当前状态是候选人，转变为追随者
 	}
 
-	if rf.getStoreIndexByLogIndex(args.PrevLogIndex) >= rf.logs.len() ||
-		rf.logsat(args.PrevLogIndex) == nil {
-		reply.Conflict = true
-		reply.XTerm = -1
-		reply.XIndex = -1
-		reply.XLen = rf.logs.len()
-		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
-		return
-	}
+	//if rf.getStoreIndexByLogIndex(args.PrevLogIndex) >= rf.logs.len() ||
+	//	rf.logsat(args.PrevLogIndex) == nil {
+	//	reply.Conflict = true
+	//	reply.XTerm = -1
+	//	reply.XIndex = -1
+	//	reply.XLen = rf.logs.len()
+	//	DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
+	//	return
+	//}
 
 	//日志追赶
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)

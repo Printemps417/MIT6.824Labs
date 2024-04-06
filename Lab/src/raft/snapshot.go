@@ -73,7 +73,7 @@ func (rf *Raft) sendInstallSnapshotToPeer(server int) {
 	defer func() {
 		timer.Stop()
 		rf.InstallList[server] = false
-		DPrintf("【%v】Snapshot installed", server)
+		DPrintf("【%v】Snapshot install finish", server)
 	}()
 	DPrintf("%v role: %v, send snapshot  to peer,%v,args = %+v", rf.me, rf.state, server, args)
 
@@ -122,6 +122,7 @@ func (rf *Raft) sendInstallSnapshotToPeer(server int) {
 		if args.LastIncludedIndex+1 > rf.nextIndex[server] {
 			rf.nextIndex[server] = args.LastIncludedIndex + 1
 		}
+		DPrintf("【%v】Snapshot installed successfully!next:【%v】match:【%v】", server, rf.nextIndex[server], rf.matchIndex[server])
 		return
 	}
 }
@@ -157,7 +158,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
 	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
-	//保存快照和状态
+	//保存新接受的快照和状态
 	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
 	return true
 }
