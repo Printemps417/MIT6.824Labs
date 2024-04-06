@@ -212,6 +212,14 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.logs.Entries[0].Index = lastIncludedIndex
 	//接下来可以读入快照的数据进行同步，这里可以不写
 	rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
+
+	////判断是否更新commitIndex和lastApplied
+	//if rf.lastSnapshotIndex > rf.commitIndex {
+	//	rf.commitIndex = rf.lastSnapshotIndex
+	//}
+	//if rf.lastSnapshotIndex > rf.lastApplied {
+	//	rf.lastApplied = rf.lastSnapshotIndex
+	//}
 	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
 	//保存新接受的快照和状态
 	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
@@ -243,7 +251,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedIndex int, lastIncludedTerm int,
 	//	rf.logs = rf.logs[installLen:]
 	//}
 
-	//DPrintf("【INSIDECond】【%v】Snapshot install begin,last:lastapplied:%v commit:%v", rf.me, rf.lastApplied, rf.commitIndex)
+	//DPrintf("【INSIDE】【%v】Snapshot install begin,last:lastapplied:%v commit:%v", rf.me, rf.lastApplied, rf.commitIndex)
 	//_, lastIndex := rf.getLastLogTermAndIndex()
 	//if lastIncludedIndex > lastIndex {
 	//	rf.logs = makeInitLog(1)
@@ -252,16 +260,24 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedIndex int, lastIncludedTerm int,
 	//	rf.logs.Entries = rf.logs.Entries[installLen:]
 	//	rf.logs.Entries[0].Command = "SnapShot"
 	//}
-	////0处是空日志，代表了快照日志的标记
+	////0处是空日志，代表了快照日志的标记。添加日志时，0处的日志不会被覆盖，index与term和快照时相同
 	//rf.logs.Entries[0].Term = lastIncludedTerm
-	//
-	////其实接下来可以读入快照的数据进行同步，这里可以不写
-	//
+	//rf.logs.Entries[0].Index = lastIncludedIndex
+	////接下来可以读入快照的数据进行同步，这里可以不写
 	//rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
-	//rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
+	////判断是否更新commitIndex和lastApplied
+	//if rf.lastSnapshotIndex > rf.commitIndex {
+	//	rf.commitIndex = rf.lastSnapshotIndex
+	//}
+	//if rf.lastSnapshotIndex > rf.lastApplied {
+	//	rf.lastApplied = rf.lastSnapshotIndex
+	//}
+	////rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
 	////保存新接受的快照和状态
 	//rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
-	//DPrintf("【INSIDECond】【%v】Snapshot install finish,last:lastapplied:%v commit:%v", rf.me, rf.lastApplied, rf.commitIndex)
+	//DPrintf("【INSIDE】【%v】Snapshot install finish,last:lastapplied:%v commit:%v", rf.me, rf.lastApplied, rf.commitIndex)
+	//
+	//DPrintf("【INSIDE】【%v】Snapshot install finish", rf.me)
 	return true
 }
 
@@ -293,4 +309,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	DPrintf("*****************************{Node %v}'s SNAPSHOT!!*****************************\n"+
 		"State is {role %v,term %v,commitIndex %v,lastApplied %v} after replacing log with snapshotIndex %v as old snapshotIndex %v is smaller\n"+
 		"********************************************************************************************************************", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, index, snapshotIndex)
+}
+
+func (rf *Raft) resetSnapShotTimer() {
+	rf.SnapShotTime = time.Now().Add(rf.SnapShotTimeOut)
 }

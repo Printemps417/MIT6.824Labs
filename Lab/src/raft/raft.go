@@ -69,9 +69,13 @@ type Raft struct {
 	state         RaftState
 	appendEntryCh chan *Entry
 
-	heartBeat    time.Duration
-	electionTime time.Time
-	rpcTimeout   time.Duration
+	electionTime    time.Time
+	SnapShotTime    time.Time
+	SnapShotTimeOut time.Duration
+	heartBeat       time.Duration
+	rpcTimeout      time.Duration
+	//每次调用electionTime都会重新计算
+	//electionTimeout time.Duration
 
 	//所有服务器的持久性状态
 	currentTerm int
@@ -174,6 +178,14 @@ func (rf *Raft) ticker() {
 			//追随者到时开始竞选
 			rf.leaderElection()
 		}
+		//if rf.state == Leader && time.Now().After(rf.SnapShotTime) {
+		//	DPrintf("【Node %v】 *****************Leader定期发送快照***************", rf.me)
+		//	for peer, _ := range rf.peers {
+		//		go rf.sendInstallSnapshotToPeer(peer)
+		//	}
+		//	//重置快照时间
+		//	rf.resetSnapShotTimer()
+		//}
 		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex, rf.logs.String())
 		//DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex)
 		rf.mu.Unlock()
@@ -190,8 +202,8 @@ func (rf *Raft) applier() {
 
 	for !rf.killed() {
 		if rf.lastApplied < rf.lastSnapshotIndex {
-			//安装快照
-			rf.CondInstallSnapshot(rf.lastSnapshotTerm, rf.lastSnapshotIndex, rf.persister.snapshot)
+			//检查已安装的快照版本和当前提交的关系
+			rf.CondInstallSnapshot(rf.lastSnapshotIndex, rf.lastSnapshotTerm, rf.persister.snapshot)
 			return
 		}
 		if rf.commitIndex > rf.lastApplied && rf.logs.lastLog().Index > rf.lastApplied {
@@ -240,8 +252,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.heartBeat = 50 * time.Millisecond
-	rf.resetElectionTimer()
+	rf.SnapShotTime = time.Now()
+	rf.SnapShotTimeOut = 10 * time.Second
 	rf.rpcTimeout = 100 * time.Millisecond
+
+	//初始化时间
+	rf.resetElectionTimer()
+	rf.resetSnapShotTimer()
 
 	rf.logs = makeEmptyLog()
 	rf.logs.append(Entry{-1, 0, 0})

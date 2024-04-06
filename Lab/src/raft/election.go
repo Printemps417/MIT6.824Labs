@@ -185,7 +185,7 @@ func (rf *Raft) candidateRequestVote(serverId int, args *RequestVoteArgs, become
 func (rf *Raft) resetElectionTimer() {
 	t := time.Now()
 	electionTimeout := time.Duration(150+rand.Intn(150)) * time.Millisecond
-	//将竞选时间推后150+随机数150毫秒
+	//每次调用都将竞选时间推后150+随机数150毫秒
 	rf.electionTime = t.Add(electionTimeout)
 }
 

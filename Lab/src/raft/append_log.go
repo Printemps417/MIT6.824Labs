@@ -237,8 +237,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.logs.lastLog().Index) // 更新提交的索引
 		rf.apply()                                                       // 应用日志条目
 	}
-	DPrintf("*****************************Append Success!*****************************\n"+
-		"【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
+	//DPrintf("*****************************Append Success!*****************************\n")
+	//DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,logs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
+	//DPrintf("*************************************************************************\n")
 	reply.Success = true // 设置回复的成功标志为true
 }
 func (rf *Raft) leaderCommitRule() {

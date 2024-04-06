@@ -64,6 +64,7 @@ func (ps *Persister) RaftStateSize() int {
 func (ps *Persister) SaveStateAndSnapshot(state []byte, snapshot []byte) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	//保存state和snapshot
 	ps.raftstate = clone(state)
 	ps.snapshot = clone(snapshot)
 }
