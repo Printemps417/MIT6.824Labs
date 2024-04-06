@@ -95,10 +95,10 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 		// rules for leader 3.1
 		if reply.Success {
 			//添加成功
-			match := args.PrevLogIndex + len(args.Entries)                // 计算匹配的日志条目索引
-			next := match + 1                                             // 计算下一个日志条目的索引
-			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新nextIndex
-			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新matchIndex
+			match := args.PrevLogIndex + len(args.Entries)
+			next := match + 1
+			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)
+			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match)
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 		} else if reply.Conflict {
 			//发生冲突
@@ -128,6 +128,13 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 				}
 			}
 			DPrintf("[%v]: leader nextIndex[%v] %v", rf.me, serverId, rf.nextIndex[serverId])
+		} else {
+			//2D并发错误
+			DPrintf("[%v]:2D Conflict from %v %#v", rf.me, serverId, reply)
+			match := reply.XIndex
+			next := match + 1
+			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)
+			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match)
 		}
 		rf.leaderCommitRule() // 执行领导者提交
 	}
@@ -171,15 +178,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//	return
 	//}
 
+	//Lab2D错误：如果PrevLogIndex大于快照的最后一个日志索引，会导致冲突，但是这种情况下不应该冲突，应该直接返回成功
+	if args.PrevLogIndex < rf.lastSnapshotIndex {
+		//未成功但不冲突的情况，更新nextIndex
+		reply.Conflict = false
+		reply.XIndex = rf.lastSnapshotIndex
+		reply.XTerm = rf.lastSnapshotTerm
+		DPrintf("[%v]: HAVE SNAPSHOT! Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
+		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
+		return
+	}
 	//日志追赶
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if rf.logs.lastLog().Index < args.PrevLogIndex {
 		reply.Conflict = true // 设置冲突标志为true
-		//reply.XTerm = -1           // 设置冲突的日志条目的任期为-1
+		//reply.XTerm = -1
 		//reply.XIndex = -1          // 设置冲突的日志条目的索引为-1
 		reply.XTerm, reply.XIndex = rf.logs.lastLog().Term, rf.logs.lastLog().Index
 		reply.XLen = rf.logs.len() // 设置冲突的日志条目的长度为日志的长度
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
+		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
 		return
 	}
 
@@ -196,6 +214,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.XTerm = xTerm        // 设置冲突的日志条目的任期
 		reply.XLen = rf.logs.len() // 设置冲突的日志条目的长度为日志的长度
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
+		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
 		return
 	}
 
@@ -220,6 +239,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.commitIndex = min(args.LeaderCommit, rf.logs.lastLog().Index) // 更新提交的索引
 		rf.apply()                                                       // 应用日志条目
 	}
+	DPrintf("*****************************Append Success!*****************************\n"+
+		"【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
 	reply.Success = true // 设置回复的成功标志为true
 }
 func (rf *Raft) leaderCommitRule() {

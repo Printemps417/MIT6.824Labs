@@ -187,5 +187,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.logs.Entries[0].Term = rf.lastSnapshotTerm
 	rf.logs.Entries[0].Command = "SnapShot"
 	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
-	DPrintf("{Node %v}'s state is {role %v,term %v,commitIndex %v,lastApplied %v} after replacing log with snapshotIndex %v as old snapshotIndex %v is smaller", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, index, snapshotIndex)
+	DPrintf("*****************************{Node %v}'s SNAPSHOT!!*****************************\n"+
+		"State is {role %v,term %v,commitIndex %v,lastApplied %v} after replacing log with snapshotIndex %v as old snapshotIndex %v is smaller\n"+
+		"********************************************************************************************************************", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, index, snapshotIndex)
 }
