@@ -117,12 +117,12 @@ func (rf *Raft) readPersist(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	var currentTerm int
-	var voteFor int
+	var votedFor int
 	var logs Log
 	var commitIndex, lastSnapshotIndex, lastSnapshotTerm int
 
 	if d.Decode(&currentTerm) != nil ||
-		d.Decode(&voteFor) != nil ||
+		d.Decode(&votedFor) != nil ||
 		d.Decode(&commitIndex) != nil ||
 		d.Decode(&lastSnapshotIndex) != nil ||
 		d.Decode(&lastSnapshotTerm) != nil ||
@@ -130,7 +130,10 @@ func (rf *Raft) readPersist(data []byte) {
 		log.Fatal("failed to read persist\n")
 	} else {
 		rf.currentTerm = currentTerm
-		rf.votedFor = voteFor
+		rf.votedFor = votedFor
+		rf.commitIndex = commitIndex
+		rf.lastSnapshotIndex = lastSnapshotIndex
+		rf.lastSnapshotTerm = lastSnapshotTerm
 		rf.logs = logs
 	}
 }

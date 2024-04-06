@@ -174,7 +174,8 @@ func (rf *Raft) ticker() {
 			//追随者到时开始竞选
 			rf.leaderElection()
 		}
-		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
+		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex, rf.logs.String())
+		//DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex)
 		rf.mu.Unlock()
 	}
 }
@@ -200,7 +201,7 @@ func (rf *Raft) applier() {
 				Command:      rf.logsat(rf.lastApplied).Command,
 				CommandIndex: rf.lastApplied,
 			}
-			DPrintf("[%v]: COMMIT %d: %v", rf.me, rf.lastApplied, rf.commits())
+			//DPrintf("[%v]: COMMIT %d: %v", rf.me, rf.lastApplied, rf.commits())
 			rf.mu.Unlock()
 			rf.applyCh <- applyMsg
 			rf.mu.Lock()
