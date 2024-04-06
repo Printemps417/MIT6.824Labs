@@ -90,8 +90,10 @@ type Raft struct {
 
 	lastSnapshotIndex int // 快照中的 index
 	lastSnapshotTerm  int
-	notifyApplyCh     chan struct{}
-	stopCh            chan struct{}
+	InstallList       []bool
+	// 通知应用层的channel
+	notifyApplyCh chan struct{}
+	stopCh        chan struct{}
 }
 
 // return currentTerm and whether this server
@@ -172,6 +174,7 @@ func (rf *Raft) ticker() {
 			//追随者到时开始竞选
 			rf.leaderElection()
 		}
+		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
 		rf.mu.Unlock()
 	}
 }
@@ -185,6 +188,11 @@ func (rf *Raft) applier() {
 	defer rf.mu.Unlock()
 
 	for !rf.killed() {
+		if rf.lastApplied < rf.lastSnapshotIndex {
+			//安装快照
+			rf.CondInstallSnapshot(rf.lastSnapshotTerm, rf.lastSnapshotIndex, rf.persister.snapshot)
+			return
+		}
 		if rf.commitIndex > rf.lastApplied && rf.logs.lastLog().Index > rf.lastApplied {
 			rf.lastApplied++
 			applyMsg := ApplyMsg{
@@ -204,7 +212,7 @@ func (rf *Raft) applier() {
 }
 func (rf *Raft) commits() string {
 	nums := []string{}
-	for i := 0; i <= rf.lastApplied; i++ {
+	for i := rf.lastSnapshotIndex + 1; i <= rf.lastApplied; i++ {
 		nums = append(nums, fmt.Sprintf("%4d", rf.logsat(i).Command))
 	}
 	return fmt.Sprint(strings.Join(nums, "|"))
@@ -240,9 +248,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+	rf.InstallList = make([]bool, len(rf.peers))
 
 	rf.applyCh = applyCh
 	rf.applyCond = sync.NewCond(&rf.mu)
+	rf.notifyApplyCh = make(chan struct{}, 100)
+	rf.stopCh = make(chan struct{})
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -252,69 +263,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.applier()
 
 	return rf
-}
-
-// Lad2D
-// A service wants to switch to snapshot.  Only do so if Raft hasn't
-// have more recent info since it communicate the snapshot on applyCh.
-//
-// 其实CondInstallSnapshot中的逻辑可以直接在InstallSnapshot中来完成，让CondInstallSnapshot成为一个空函数，这样可以减少锁的获取和释放
-func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	// Your code here (2D).
-	//installLen := lastIncludedIndex - rf.lastSnapshotIndex
-	//if installLen >= len(rf.logs)-1 {
-	//	rf.logs = make([]LogEntry, 1)
-	//	rf.logs[0].Term = lastIncludedTerm
-	//} else {
-	//	rf.logs = rf.logs[installLen:]
-	//}
-	_, lastIndex := rf.getLastLogTermAndIndex()
-	if lastIncludedIndex > lastIndex {
-		rf.logs = makeEmptyLog()
-	} else {
-		installLen := lastIncludedIndex - rf.lastSnapshotIndex
-		rf.logs.Entries = rf.logs.Entries[installLen:]
-		rf.logs.Entries[0].Command = nil
-	}
-	//0处是空日志，代表了快照日志的标记
-	rf.logs.Entries[0].Term = lastIncludedTerm
-
-	//其实接下来可以读入快照的数据进行同步，这里可以不写
-
-	rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
-	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
-	//保存快照和状态
-	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
-	return true
-}
-
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
-// 生成一次快照，实现很简单，删除掉对应已经被压缩的 raft log 即可
-// index是当前要压缩到的index，snapshot是已经帮我们压缩好的数据
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	snapshotIndex := rf.lastSnapshotIndex
-	if snapshotIndex >= index {
-		DPrintf("{Node %v} rejects replacing log with snapshotIndex %v as current snapshotIndex %v is larger in term %v", rf.me, index, snapshotIndex, rf.currentTerm)
-		return
-	}
-	oldLastSnapshotIndex := rf.lastSnapshotIndex
-	rf.lastSnapshotTerm = rf.logs.Entries[rf.getStoreIndexByLogIndex(index)].Term
-	rf.lastSnapshotIndex = index
-	//删掉index前的所有日志
-	rf.logs.Entries = rf.logs.Entries[index-oldLastSnapshotIndex:]
-	//0位置就是快照命令
-	rf.logs.Entries[0].Term = rf.lastSnapshotTerm
-	rf.logs.Entries[0].Command = nil
-	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
-	DPrintf("{Node %v}'s state is {role %v,term %v,commitIndex %v,lastApplied %v} after replacing log with snapshotIndex %v as old snapshotIndex %v is smaller", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, index, snapshotIndex)
 }
 
 // 返回当前状态机的最后一条日志的任期和索引
@@ -333,5 +281,9 @@ func (rf *Raft) getStoreIndexByLogIndex(logIndex int) int {
 	return storeIndex
 }
 func (rf *Raft) logsat(logIndex int) *Entry {
-	return rf.logs.at(rf.getStoreIndexByLogIndex(logIndex))
+	if rf.getStoreIndexByLogIndex(logIndex) >= 0 {
+		return rf.logs.at(rf.getStoreIndexByLogIndex(logIndex))
+	} else {
+		return nil
+	}
 }

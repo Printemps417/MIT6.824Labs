@@ -28,6 +28,14 @@ func makeEmptyLog() Log {
 	return log
 }
 
+func makeInitLog(x int) Log {
+	log := Log{
+		Entries: make([]Entry, x),
+		Index0:  0,
+	}
+	return log
+}
+
 func (l *Log) at(idx int) *Entry {
 	return &l.Entries[idx]
 }

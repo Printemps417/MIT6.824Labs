@@ -42,21 +42,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	lastIncludedIndex := args.LastIncludedIndex
 	lastIncludedTerm := args.LastIncludedTerm
-	_, lastIndex := rf.getLastLogTermAndIndex()
-	if lastIncludedIndex > lastIndex {
-		rf.logs = makeEmptyLog()
-	} else {
-		installLen := lastIncludedIndex - rf.lastSnapshotIndex
-		rf.logs.Entries = rf.logs.Entries[installLen:]
-		rf.logs.Entries[0].Command = nil
-	}
-	//0处是空日志，代表了快照日志的标记
-	rf.logs.Entries[0].Term = lastIncludedTerm
-
-	rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
-	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
-	//保存快照和状态
-	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), args.Data)
+	snapshot := args.Data
+	rf.CondInstallSnapshot(lastIncludedIndex, lastIncludedTerm, snapshot)
 
 	/***********************************/
 
@@ -67,7 +54,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotTerm:  args.LastIncludedTerm,
 		SnapshotIndex: args.LastIncludedIndex,
 	}
-
 }
 
 // 向指定节点发送快照
@@ -81,9 +67,14 @@ func (rf *Raft) sendInstallSnapshotToPeer(server int) {
 		Data:              rf.persister.ReadSnapshot(),
 	}
 	rf.mu.Unlock()
-
+	rf.InstallList[server] = true
+	DPrintf("【%v】 Snapshot installing", server)
 	timer := time.NewTimer(rf.rpcTimeout)
-	defer timer.Stop()
+	defer func() {
+		timer.Stop()
+		rf.InstallList[server] = false
+		DPrintf("【%v】Snapshot installed", server)
+	}()
 	DPrintf("%v role: %v, send snapshot  to peer,%v,args = %+v", rf.me, rf.state, server, args)
 
 	for {
@@ -133,4 +124,67 @@ func (rf *Raft) sendInstallSnapshotToPeer(server int) {
 		}
 		return
 	}
+}
+
+// Lad2D
+// A service wants to switch to snapshot.  Only do so if Raft hasn't
+// have more recent info since it communicate the snapshot on applyCh.
+//
+// 其实CondInstallSnapshot中的逻辑可以直接在InstallSnapshot中来完成，让CondInstallSnapshot成为一个空函数，这样可以减少锁的获取和释放
+func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// Your code here (2D).
+	//installLen := lastIncludedIndex - rf.lastSnapshotIndex
+	//if installLen >= len(rf.logs)-1 {
+	//	rf.logs = make([]LogEntry, 1)
+	//	rf.logs[0].Term = lastIncludedTerm
+	//} else {
+	//	rf.logs = rf.logs[installLen:]
+	//}
+	_, lastIndex := rf.getLastLogTermAndIndex()
+	if lastIncludedIndex > lastIndex {
+		rf.logs = makeInitLog(1)
+	} else {
+		installLen := lastIncludedIndex - rf.lastSnapshotIndex
+		rf.logs.Entries = rf.logs.Entries[installLen:]
+		rf.logs.Entries[0].Command = "SnapShot"
+	}
+	//0处是空日志，代表了快照日志的标记
+	rf.logs.Entries[0].Term = lastIncludedTerm
+
+	//其实接下来可以读入快照的数据进行同步，这里可以不写
+
+	rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
+	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
+	//保存快照和状态
+	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
+	return true
+}
+
+// the service says it has created a snapshot that has
+// all info up to and including index. this means the
+// service no longer needs the log through (and including)
+// that index. Raft should now trim its log as much as possible.
+// 生成一次快照，实现很简单，删除掉对应已经被压缩的 raft log 即可
+// index是当前要压缩到的index，snapshot是已经帮我们压缩好的数据
+func (rf *Raft) Snapshot(index int, snapshot []byte) {
+	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	snapshotIndex := rf.lastSnapshotIndex
+	if snapshotIndex >= index {
+		DPrintf("{Node %v} rejects replacing log with snapshotIndex %v as current snapshotIndex %v is larger in term %v", rf.me, index, snapshotIndex, rf.currentTerm)
+		return
+	}
+	oldLastSnapshotIndex := rf.lastSnapshotIndex
+	rf.lastSnapshotTerm = rf.logs.Entries[rf.getStoreIndexByLogIndex(index)].Term
+	rf.lastSnapshotIndex = index
+	//删掉index前的所有日志
+	rf.logs.Entries = rf.logs.Entries[index-oldLastSnapshotIndex:]
+	//0位置就是快照命令
+	rf.logs.Entries[0].Term = rf.lastSnapshotTerm
+	rf.logs.Entries[0].Command = "SnapShot"
+	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
+	DPrintf("{Node %v}'s state is {role %v,term %v,commitIndex %v,lastApplied %v} after replacing log with snapshotIndex %v as old snapshotIndex %v is smaller", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, index, snapshotIndex)
 }

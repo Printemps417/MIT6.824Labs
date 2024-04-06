@@ -27,7 +27,10 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	}
 	return
 }
-
+func CPrintf(format string, a ...interface{}) (n int, err error) {
+	logger.Printf(format, a...)
+	return
+}
 func min(a int, b int) int {
 	if a > b {
 		return b

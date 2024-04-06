@@ -32,6 +32,16 @@ func (rf *Raft) appendEntriesToPeers(heartbeat bool) {
 			rf.resetElectionTimer()
 			continue
 		}
+		if rf.InstallList[peer] {
+			//如果当前peer正在安装快照，不发送日志
+			rf.resetElectionTimer()
+			continue
+		}
+		//if rf.nextIndex[peer] <= rf.lastSnapshotIndex {
+		//	// 如果下一个索引小于或等于快照的索引，发送快照
+		//	go rf.sendInstallSnapshotToPeer(peer)
+		//	continue
+		//}
 		// 如果最后一条日志的索引大于或等于下一个索引，或者是心跳
 		if lastLog.Index >= rf.nextIndex[peer] || heartbeat {
 			// 获取下一个索引
@@ -46,6 +56,9 @@ func (rf *Raft) appendEntriesToPeers(heartbeat bool) {
 			}
 			// 获取前一条日志
 			prevLog := rf.logsat(nextIndex - 1)
+			if prevLog == nil {
+				continue
+			}
 			// 初始化附加日志条目请求的参数
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,                           // 当前任期
@@ -55,8 +68,8 @@ func (rf *Raft) appendEntriesToPeers(heartbeat bool) {
 				Entries:      make([]Entry, lastLog.Index-nextIndex+1), // 日志条目
 				LeaderCommit: rf.commitIndex,                           // 领导者的commitIndex
 			}
-			// 复制日志条目
-			copy(args.Entries, rf.logs.slice(nextIndex))
+			// 深拷贝复制日志条目，不然会和Snapshot()发生数据上的冲突
+			copy(args.Entries, rf.logs.slice(rf.getStoreIndexByLogIndex(nextIndex)))
 			// 启动一个新的goroutine来处理领导者发送日志条目的逻辑
 			go rf.leaderSendEntries(peer, &args)
 		}
@@ -81,16 +94,20 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 		// 请求的任期等于当前任期
 		// rules for leader 3.1
 		if reply.Success {
+			//添加成功
 			match := args.PrevLogIndex + len(args.Entries)                // 计算匹配的日志条目索引
 			next := match + 1                                             // 计算下一个日志条目的索引
 			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)    // 更新nextIndex
 			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match) // 更新matchIndex
 			DPrintf("[%v]: %v append success next %v match %v", rf.me, serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
-		} else if reply.Conflict {
+		} else {
+			//发生冲突
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
 			if rf.lastSnapshotIndex >= reply.XIndex {
-				//发送快照解决冲突
-				go rf.sendInstallSnapshotToPeer(serverId)
+				if !rf.InstallList[serverId] {
+					//防止重复发送快照
+					go rf.sendInstallSnapshotToPeer(serverId)
+				}
 			} else {
 				if reply.XTerm == args.PrevLogTerm {
 					//任期相同: If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
@@ -111,58 +128,8 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 				}
 			}
 			DPrintf("[%v]: leader nextIndex[%v] %v", rf.me, serverId, rf.nextIndex[serverId])
-		} else if rf.nextIndex[serverId] > 1 {
-			rf.nextIndex[serverId]--
 		}
 		rf.leaderCommitRule() // 执行领导者提交
-	}
-}
-
-func (rf *Raft) findLastLogInTerm(x int) int {
-	//查找给定任期（term）的最后一个日志条目的索引
-	for i := rf.logs.lastLog().Index; i > 0; i-- {
-		term := rf.logsat(i).Term
-		if term == x {
-			return i
-		} else if term < x {
-			break
-		}
-	}
-	return -1
-}
-
-func (rf *Raft) leaderCommitRule() {
-	// 领导者规则4：
-	//If there exists an N such that N > commitIndex,
-	//a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-	//set commitIndex = N (§5.3, §5.4).
-	if rf.state != Leader {
-		// 如果当前状态不是领导者，直接返回
-		return
-	}
-
-	for n := rf.commitIndex + 1; n <= rf.logs.lastLog().Index; n++ {
-		// 从commitIndex+1开始，遍历到最后一条日志的索引
-		if rf.logsat(n).Term != rf.currentTerm {
-			// 如果日志的任期不等于当前任期，跳过当前循环
-			continue
-		}
-		counter := 1 // 初始化计数器
-		for serverId := 0; serverId < len(rf.peers); serverId++ {
-			if serverId != rf.me && rf.matchIndex[serverId] >= n {
-				// 服务器不是自己且matchIndex大于或等于n，计数器加1
-				counter++
-			}
-			if counter > len(rf.peers)/2 {
-				// 如果计数器大于服务器数量的一半
-				rf.commitIndex = n
-				DPrintf("[%v] leader尝试提交 index %v", rf.me, rf.commitIndex)
-				// 领导者提交的索引
-				rf.apply()
-				// 应用日志条目
-				break
-			}
-		}
 	}
 }
 
@@ -192,6 +159,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 候选人规则 3  If AppendEntries RPC received from new leader: convert to follower
 	if rf.state == Candidate {
 		rf.state = Follower // 如果当前状态是候选人，转变为追随者
+	}
+
+	if rf.getStoreIndexByLogIndex(args.PrevLogIndex) >= rf.logs.len() ||
+		rf.logsat(args.PrevLogIndex) == nil {
+		reply.Conflict = true
+		reply.XTerm = -1
+		reply.XIndex = -1
+		reply.XLen = rf.logs.len()
+		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
+		return
 	}
 
 	//日志追赶
@@ -244,4 +221,51 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.apply()                                                       // 应用日志条目
 	}
 	reply.Success = true // 设置回复的成功标志为true
+}
+func (rf *Raft) leaderCommitRule() {
+	// 领导者规则4：
+	//If there exists an N such that N > commitIndex,
+	//a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+	//set commitIndex = N (§5.3, §5.4).
+	if rf.state != Leader {
+		// 如果当前状态不是领导者，直接返回
+		return
+	}
+
+	for n := rf.commitIndex + 1; n <= rf.logs.lastLog().Index; n++ {
+		// 从commitIndex+1开始，遍历到最后一条日志的索引
+		if rf.logsat(n).Term != rf.currentTerm {
+			// 如果日志的任期不等于当前任期，跳过当前循环
+			continue
+		}
+		counter := 1 // 初始化计数器
+		for serverId := 0; serverId < len(rf.peers); serverId++ {
+			if serverId != rf.me && rf.matchIndex[serverId] >= n {
+				// 服务器不是自己且matchIndex大于或等于n，计数器加1
+				counter++
+			}
+			if counter > len(rf.peers)/2 {
+				// 如果计数器大于服务器数量的一半
+				rf.commitIndex = n
+				DPrintf("[%v] leader尝试提交 index %v", rf.me, rf.commitIndex)
+				// 领导者提交的索引
+				rf.apply()
+				// 应用日志条目
+				break
+			}
+		}
+	}
+}
+
+func (rf *Raft) findLastLogInTerm(x int) int {
+	//查找给定任期（term）的最后一个日志条目的索引
+	for i := rf.logs.lastLog().Index; i > 0; i-- {
+		term := rf.logsat(i).Term
+		if term == x {
+			return i
+		} else if term < x {
+			break
+		}
+	}
+	return -1
 }
