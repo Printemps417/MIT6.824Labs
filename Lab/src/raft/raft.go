@@ -186,7 +186,7 @@ func (rf *Raft) ticker() {
 		//	//重置快照时间
 		//	rf.resetSnapShotTimer()
 		//}
-		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex, rf.logs.String())
+		DPrintf("【【Node %v】】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex, rf.logs.String())
 		//DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex)
 		rf.mu.Unlock()
 	}
@@ -202,8 +202,8 @@ func (rf *Raft) applier() {
 
 	for !rf.killed() {
 		if rf.lastApplied < rf.lastSnapshotIndex {
-			//检查已安装的快照版本和当前提交的关系
-			rf.CondInstallSnapshot(rf.lastSnapshotIndex, rf.lastSnapshotTerm, rf.persister.snapshot)
+			DPrintf("【%v】: Restarting using snapshot…………", rf.me)
+			//rf.CondInstallSnapshot(rf.lastSnapshotIndex, rf.lastSnapshotTerm, rf.persister.ReadSnapshot())
 			return
 		}
 		if rf.commitIndex > rf.lastApplied && rf.logs.lastLog().Index > rf.lastApplied {

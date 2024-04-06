@@ -1,6 +1,10 @@
 package raft
 
-import "time"
+import (
+	"6.824/labgob"
+	"bytes"
+	"time"
+)
 
 type InstallSnapshotArgs struct {
 	Term              int
@@ -212,14 +216,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.logs.Entries[0].Index = lastIncludedIndex
 	//接下来可以读入快照的数据进行同步，这里可以不写
 	rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
-
-	////判断是否更新commitIndex和lastApplied
-	//if rf.lastSnapshotIndex > rf.commitIndex {
-	//	rf.commitIndex = rf.lastSnapshotIndex
-	//}
-	//if rf.lastSnapshotIndex > rf.lastApplied {
-	//	rf.lastApplied = rf.lastSnapshotIndex
-	//}
 	rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
 	//保存新接受的快照和状态
 	rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
@@ -234,6 +230,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotTerm:  args.LastIncludedTerm,
 		SnapshotIndex: args.LastIncludedIndex,
 	}
+	//唤醒因为快照而阻塞的节点
+	//rf.apply()
 }
 
 // CondInstallSnapshot Lad2D
@@ -242,15 +240,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 //
 // 其实CondInstallSnapshot中的逻辑可以直接在InstallSnapshot中来完成，让CondInstallSnapshot成为一个空函数，这样可以减少锁的获取和释放
 func (rf *Raft) CondInstallSnapshot(lastIncludedIndex int, lastIncludedTerm int, snapshot []byte) bool {
-	// Your code here (2D).
-	//installLen := lastIncludedIndex - rf.lastSnapshotIndex
-	//if installLen >= len(rf.logs)-1 {
-	//	rf.logs = make([]LogEntry, 1)
-	//	rf.logs[0].Term = lastIncludedTerm
-	//} else {
-	//	rf.logs = rf.logs[installLen:]
-	//}
-
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
 	//DPrintf("【INSIDE】【%v】Snapshot install begin,last:lastapplied:%v commit:%v", rf.me, rf.lastApplied, rf.commitIndex)
 	//_, lastIndex := rf.getLastLogTermAndIndex()
 	//if lastIncludedIndex > lastIndex {
@@ -265,19 +256,20 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedIndex int, lastIncludedTerm int,
 	//rf.logs.Entries[0].Index = lastIncludedIndex
 	////接下来可以读入快照的数据进行同步，这里可以不写
 	//rf.lastSnapshotIndex, rf.lastSnapshotTerm = lastIncludedIndex, lastIncludedTerm
-	////判断是否更新commitIndex和lastApplied
-	//if rf.lastSnapshotIndex > rf.commitIndex {
-	//	rf.commitIndex = rf.lastSnapshotIndex
-	//}
-	//if rf.lastSnapshotIndex > rf.lastApplied {
-	//	rf.lastApplied = rf.lastSnapshotIndex
-	//}
-	////rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
+	//rf.lastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
 	////保存新接受的快照和状态
 	//rf.persister.SaveStateAndSnapshot(rf.getPersistData(), snapshot)
 	//DPrintf("【INSIDE】【%v】Snapshot install finish,last:lastapplied:%v commit:%v", rf.me, rf.lastApplied, rf.commitIndex)
-	//
+	////复制快照结束
+	///***********************************/
 	//DPrintf("【INSIDE】【%v】Snapshot install finish", rf.me)
+	////接收发来的快照，并提交一个命令处理
+	//rf.applyCh <- ApplyMsg{
+	//	SnapshotValid: true,
+	//	Snapshot:      snapshot,
+	//	SnapshotTerm:  lastIncludedTerm,
+	//	SnapshotIndex: lastIncludedIndex,
+	//}
 	return true
 }
 
@@ -313,4 +305,50 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 func (rf *Raft) resetSnapShotTimer() {
 	rf.SnapShotTime = time.Now().Add(rf.SnapShotTimeOut)
+}
+
+func decodeSnapshot(snapshot []byte) (lastIncludedIndex int, lastIncludedTerm int, err error) {
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	err = d.Decode(&lastIncludedIndex)
+	if err != nil {
+		return
+	}
+	err = d.Decode(&lastIncludedTerm)
+	return
+}
+func (rf *Raft) InstallLocalSnapshot() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// 从 persister 中读取快照
+	snapshot := rf.persister.ReadSnapshot()
+	if snapshot == nil || len(snapshot) < 1 {
+		// 如果没有快照，则直接返回
+		return
+	}
+
+	// 解析快照数据，获取快照中包含的最后一条日志的索引和任期
+	lastIncludedIndex, lastIncludedTerm, err := decodeSnapshot(snapshot)
+	if err != nil {
+		// 如果解析快照数据出错，则直接返回
+		return
+	}
+
+	// 更新 Raft 实例的 lastSnapshotIndex 和 lastSnapshotTerm
+	rf.lastSnapshotIndex = lastIncludedIndex
+	rf.lastSnapshotTerm = lastIncludedTerm
+
+	// 更新 lastApplied 和 commitIndex
+	rf.lastApplied = lastIncludedIndex
+	rf.commitIndex = lastIncludedIndex
+
+	// 将快照数据发送到 applyCh
+	applyMsg := ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      snapshot,
+		SnapshotTerm:  lastIncludedTerm,
+		SnapshotIndex: lastIncludedIndex,
+	}
+	rf.applyCh <- applyMsg
 }
