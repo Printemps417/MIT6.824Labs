@@ -20,99 +20,6 @@ type InstallSnapshotReply struct {
 	Term int
 }
 
-// // 向指定节点发送快照
-//
-//	func (rf *Raft) sendInstallSnapshotToPeer(server int) {
-//		rf.mu.Lock()
-//		args := InstallSnapshotArgs{
-//			Term:              rf.currentTerm,
-//			LeaderId:          rf.me,
-//			LastIncludedIndex: rf.lastSnapshotIndex,
-//			LastIncludedTerm:  rf.lastSnapshotTerm,
-//			Data:              rf.persister.ReadSnapshot(),
-//		}
-//		rf.mu.Unlock()
-//		rf.InstallList[server] = true
-//		timer := time.NewTimer(rf.rpcTimeout)
-//
-//		DPrintf("【%v】 Snapshot installing", server)
-//		defer func() {
-//			timer.Stop()
-//			rf.InstallList[server] = false
-//			DPrintf("【%v】Snapshot install finish", server)
-//		}()
-//
-//		DPrintf("%v role: %v, send snapshot  to peer,%v,args = %+v", rf.me, rf.state, server, args)
-//		//cnt := 0
-//		//reply := &InstallSnapshotReply{}
-//		//for !rf.killed() {
-//		//	cnt++
-//		//	if cnt > 10 {
-//		//		//超时
-//		//		DPrintf("【%v】TIME OUT!!Snapshot install failed", server)
-//		//		return
-//		//	}
-//		//	DPrintf("%v role: %v, send snapshot  to peer,%v,args = %+v", rf.me, rf.state, server, args)
-//		//	ok := rf.peers[server].Call("Raft.InstallSnapshot", &args, reply)
-//		//	if !ok {
-//		//		time.Sleep(time.Millisecond * 200)
-//		//	} else {
-//		//		break
-//		//	}
-//		//}
-//		//
-//		for {
-//			timer.Stop()
-//			timer.Reset(rf.rpcTimeout)
-//
-//			ch := make(chan bool, 1)
-//			reply := &InstallSnapshotReply{}
-//			go func() {
-//				ok := rf.peers[server].Call("Raft.InstallSnapshot", &args, reply)
-//				if !ok {
-//					time.Sleep(time.Millisecond * 10)
-//				}
-//				ch <- ok
-//			}()
-//
-//			select {
-//			case <-rf.stopCh:
-//				return
-//			case <-timer.C:
-//				DPrintf("%v role: %v, send snapshot to peer %v TIME OUT!!!", rf.me, rf.state, server)
-//				continue
-//			case ok := <-ch:
-//				if !ok {
-//					continue
-//				}
-//			}
-//
-//			rf.mu.Lock()
-//			defer rf.mu.Unlock()
-//			if rf.state != Leader || args.Term != rf.currentTerm {
-//				return
-//			}
-//			if reply.Term > rf.currentTerm {
-//				rf.state = Follower
-//				rf.currentTerm = reply.Term
-//				rf.resetElectionTimer()
-//				rf.persist()
-//				return
-//			}
-//			//发送快照成功，更新matchindex和nextindex
-//			if args.LastIncludedIndex > rf.matchIndex[server] {
-//				DPrintf("Update 【%v】 matchIndex,from %v to %v", server, rf.matchIndex[server], args.LastIncludedIndex)
-//				rf.matchIndex[server] = args.LastIncludedIndex
-//			}
-//			if args.LastIncludedIndex+1 > rf.nextIndex[server] {
-//				DPrintf("Update 【%v】 nextIndex,from %v to %v", server, rf.nextIndex[server], args.LastIncludedIndex+1)
-//				rf.nextIndex[server] = args.LastIncludedIndex + 1
-//			}
-//			//DPrintf("【%v】Snapshot installed successfully!next:【%v】match:【%v】", server, rf.nextIndex[server], rf.matchIndex[server])
-//			return
-//		}
-//	}
-//
 // 向指定节点发送快照
 func (rf *Raft) sendInstallSnapshotToPeer(server int) {
 	rf.mu.Lock()
@@ -318,9 +225,8 @@ func decodeSnapshot(snapshot []byte) (lastIncludedIndex int, lastIncludedTerm in
 	return
 }
 func (rf *Raft) InstallLocalSnapshot() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
+	DPrintf("【%v】: Restarting Begining…………", rf.me)
 	// 从 persister 中读取快照
 	snapshot := rf.persister.ReadSnapshot()
 	if snapshot == nil || len(snapshot) < 1 {
@@ -342,7 +248,7 @@ func (rf *Raft) InstallLocalSnapshot() {
 	// 更新 lastApplied 和 commitIndex
 	rf.lastApplied = lastIncludedIndex
 	rf.commitIndex = lastIncludedIndex
-
+	DPrintf("【%v】: Restarting Successfully!…………", rf.me)
 	// 将快照数据发送到 applyCh
 	applyMsg := ApplyMsg{
 		SnapshotValid: true,

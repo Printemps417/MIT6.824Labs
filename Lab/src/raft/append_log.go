@@ -172,7 +172,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.state == Candidate {
 		rf.state = Follower // 如果当前状态是候选人，转变为追随者
 	}
-
+	//重启
 	//Lab2D错误：如果PrevLogIndex大于快照的最后一个日志索引，会导致冲突，但是这种情况下不应该冲突，应该直接返回成功
 	if args.PrevLogIndex < rf.lastSnapshotIndex {
 		//未成功但不冲突的情况，更新nextIndex

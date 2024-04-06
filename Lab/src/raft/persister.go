@@ -85,6 +85,11 @@ func (ps *Persister) SnapshotSize() int {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) getPersistData() []byte {
+	//curlogs := rf.logs
+	//rf.readPersist(rf.persister.ReadRaftState())
+	////得到所有的日志
+	//rf.logs.append(curlogs.Entries...)
+
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -98,7 +103,7 @@ func (rf *Raft) getPersistData() []byte {
 }
 
 func (rf *Raft) persist() {
-	DPrintf("[%v] :STATE:%v", rf.me, rf.logs.String())
+	DPrintf("[%v] :Persisted!STATE:%v", rf.me, rf.logs.String())
 	data := rf.getPersistData()
 	rf.persister.SaveRaftState(data)
 }
