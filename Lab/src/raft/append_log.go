@@ -103,7 +103,7 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 		} else if reply.Conflict {
 			//发生冲突
 			DPrintf("[%v]: Conflict from %v %#v", rf.me, serverId, reply)
-			if rf.lastSnapshotIndex > reply.XIndex {
+			if rf.lastSnapshotIndex >= reply.XIndex {
 				if !rf.InstallList[serverId] {
 					//防止重复发送快照
 					DPrintf("【Node %v conflict】CASE1发送快照", serverId)
