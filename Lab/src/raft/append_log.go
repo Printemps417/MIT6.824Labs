@@ -112,17 +112,14 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 			} else {
 				if reply.XTerm == args.PrevLogTerm {
 					//任期相同: 属于日志落后，reply中的nextindex为需要的下一条日志的索引
-					if rf.nextIndex[serverId] > 1 {
-						DPrintf("【Node %v conflict】CASE2递减", serverId)
-						//rf.nextIndex[serverId]--
-						rf.nextIndex[serverId] = reply.XIndex
-					}
+					DPrintf("【Node %v conflict】CASE2递减", serverId)
+					rf.nextIndex[serverId] = reply.XIndex
 				} else {
 					// 任期不同，查找冲突的日志条目的任期的最后一个日志条目
-					//If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
-					lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm) // 查找冲突的日志条目的任期的最后一个日志条目
-					DPrintf("【Node %v conflict】CASE3日志冲突", serverId)
+					lastLogInXTerm := rf.findFirstLogInTerm(reply.XTerm) // 查找冲突的日志条目的任期的第一个日志条目
+					DPrintf("【Node %v conflict】CASE3日志冲突:[Leader:Term %v  Index:%v][server%v:Term %v  Index:%v]", serverId, args.PrevLogTerm, args.PrevLogIndex, serverId, reply.XTerm, reply.XIndex)
 					DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
+					//加快恢复时间
 					if lastLogInXTerm > 0 {
 						// 如果找到，设置nextIndex为冲突的日志条目的任期的最后一个日志条目的索引
 						rf.nextIndex[serverId] = lastLogInXTerm
@@ -130,6 +127,10 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 						// 如果没有找到，设置nextIndex为冲突的日志条目的索引
 						rf.nextIndex[serverId] = reply.XIndex
 					}
+					//if rf.nextIndex[serverId] > rf.lastSnapshotIndex {
+					//	//If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
+					//	//rf.nextIndex[serverId]--
+					//}
 				}
 			}
 			DPrintf("[%v]: leader nextIndex[%v] %v", rf.me, serverId, rf.nextIndex[serverId])
@@ -203,6 +204,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.logsat(args.PrevLogIndex).Term != args.PrevLogTerm {
 		reply.Conflict = true                      // 设置冲突标志为true
 		xTerm := rf.logsat(args.PrevLogIndex).Term // 获取冲突的日志条目的任期
+		//xIndex := args.PrevLogIndex
+		//寻找冲突任期的最后一条日志
 		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
 			if rf.logsat(xIndex-1).Term != xTerm {
 				reply.XIndex = xIndex // 设置冲突的日志条目的索引
@@ -210,6 +213,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 		}
 		//reply中有冲突的日志条目的term,冲突任期的第一条日志条目的index,日志的长度
+		//reply.XIndex = xIndex
 		reply.XTerm = xTerm
 		reply.XLen = rf.logs.len()
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
@@ -217,7 +221,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	//没冲突，reply.Conflict=false，正常追加日志
+	//没冲突，reply.Conflict=false，正常追加日志or截断冲突日志
 	for idx, entry := range args.Entries {
 		// 附加日志 rpc 3  If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
 		if entry.Index <= rf.logs.lastLog().Index && rf.logsat(entry.Index).Term != entry.Term {
@@ -281,6 +285,18 @@ func (rf *Raft) leaderCommitRule() {
 func (rf *Raft) findLastLogInTerm(x int) int {
 	//查找给定任期（term）的最后一个日志条目的索引
 	for i := rf.logs.lastLog().Index; i > rf.lastSnapshotIndex; i-- {
+		term := rf.logsat(i).Term
+		if term == x {
+			return i
+		} else if term < x {
+			break
+		}
+	}
+	return -1
+}
+func (rf *Raft) findFirstLogInTerm(x int) int {
+	//查找给定任期（term）的最后一个日志条目的索引
+	for i := rf.lastSnapshotIndex + 1; i <= rf.logs.lastLog().Index; i++ {
 		term := rf.logsat(i).Term
 		if term == x {
 			return i
