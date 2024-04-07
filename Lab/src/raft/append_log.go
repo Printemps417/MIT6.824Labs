@@ -111,15 +111,15 @@ func (rf *Raft) leaderSendEntries(serverId int, args *AppendEntriesArgs) {
 				}
 			} else {
 				if reply.XTerm == args.PrevLogTerm {
-					//任期相同: If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
+					//任期相同: 属于日志落后，reply中的nextindex为需要的下一条日志的索引
 					if rf.nextIndex[serverId] > 1 {
 						DPrintf("【Node %v conflict】CASE2递减", serverId)
-						//落后不递减，直接设置为冲突的日志条目的索引
 						//rf.nextIndex[serverId]--
 						rf.nextIndex[serverId] = reply.XIndex
 					}
 				} else {
 					// 任期不同，查找冲突的日志条目的任期的最后一个日志条目
+					//If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
 					lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm) // 查找冲突的日志条目的任期的最后一个日志条目
 					DPrintf("【Node %v conflict】CASE3日志冲突", serverId)
 					DPrintf("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
@@ -199,7 +199,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	//日志冲突
+	//日志冲突，reply.XIndex为
 	if rf.logsat(args.PrevLogIndex).Term != args.PrevLogTerm {
 		reply.Conflict = true                      // 设置冲突标志为true
 		xTerm := rf.logsat(args.PrevLogIndex).Term // 获取冲突的日志条目的任期
@@ -209,8 +209,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				break
 			}
 		}
-		reply.XTerm = xTerm        // 设置冲突的日志条目的任期
-		reply.XLen = rf.logs.len() // 设置冲突的日志条目的长度为日志的长度
+		//reply中有冲突的日志条目的term,冲突任期的第一条日志条目的index,日志的长度
+		reply.XTerm = xTerm
+		reply.XLen = rf.logs.len()
 		DPrintf("[%v]: Conflict XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
 		DPrintf("【Node %v】's state is {role %v,term %v,commitIndex %v,lastApplied %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.logs.String())
 		return
