@@ -204,10 +204,11 @@ func (rf *Raft) applier() {
 		if rf.lastApplied < rf.lastSnapshotIndex {
 			DPrintf("【%v】: Restarting using snapshot…………", rf.me)
 			DPrintf("【【Node %v】】's state is {role %v,term %v,commitIndex %v,lastApplied %v,lastSnapshot: %v,\nlogs: %v} ", rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.lastSnapshotIndex, rf.logs.String())
+			rf.lastApplied = rf.lastSnapshotIndex
 			////等待快照安装完成
 			//rf.InstallLocalSnapshot()
 			////rf.CondInstallSnapshot(rf.lastSnapshotIndex, rf.lastSnapshotTerm, rf.persister.ReadSnapshot())
-			//continue
+			continue
 		}
 		if rf.commitIndex > rf.lastApplied && rf.logs.lastLog().Index > rf.lastApplied {
 			rf.lastApplied++
