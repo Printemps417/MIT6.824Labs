@@ -94,4 +94,45 @@
 - 一种是每个副本维护一个全局的 zxid，为最新 apply 的 log 的 index，每次有请求到来，将请求中的 zxid 与自己的 zxid 比较，如果请求的 zxid 大于自己的 zxid，则拒绝请求，等待自己 apply 了对应的 log 后再响应请求。
 - 另一种是在每个 value 后标注最后一次更改该 value 的 zxid，当读该 value 的请求到来时，将请求中的 zxid 与 value 的 zxid 比较，如果请求的 zxid 大于 value 的 zxid，则拒绝请求，等待自己 apply 了对应的 log 后再响应请求。
 
+## ZNodes
+- Zookeeper 的数据模型是一个树形结构，类似于文件系统，树中的每个节点称为 ZNode。
+- ZNode 有三种类型：持久节点，临时节点（客户端需要定期发送心跳）和顺序节点（节点名后面会加上一个唯一的单调递增的数字，保持唯一）。
+
+## Zookeeper API in GO（可见zookeeper）
+- `Create`：创建一个 ZNode，可以是持久节点、临时节点或者顺序节点。
+- `Delete`：删除一个 ZNode。
+- `Exists`：检查一个 ZNode 是否存在。
+- `Get`：获取一个 ZNode 的数据。
+- `GetW`：获取一个 ZNode 的数据，并且传入chan watcher，监视 ZNode 的变化。
+- `Set`：设置一个 ZNode 的数据。
+- `Children`：获取一个 ZNode 的子节点。
+- `Sync`：同步一个 ZNode。
+- `ACL`：访问控制列表。
+
+## 非扩展锁 unscaleable locks
+- 非扩展锁是指在一个节点上加锁，这样的锁可以用于实现分布式锁，但是会受到羊群效应的影响。
+```
+  WHILE TRUE:
+  IF CREATE("f", data, ephemeral=TRUE): RETURN
+  IF EXIST("f", watch=TRUE):
+  WAIT
+ ```
+
+## 扩展锁 scalable locks
+- 扩展锁是指每个节点都创建一个唯一序号的锁，若存在序号更低的锁则阻塞。这样可以避免羊群效应。
+```
+  CREATE("f", data, sequential=TRUE, ephemeral=TRUE)
+  WHILE TRUE:
+  LIST("f*")
+  IF NO LOWER #FILE: RETURN
+  IF EXIST(NEXT LOWER #FILE, watch=TRUE):
+  WAIT
+```
+- 拓展锁的缺点：如果持有锁的客户端挂了，它会释放锁，另一个客户端可以接着获得锁，所以它并不确保原子性。因为你在分布式系统中可能会有部分故障（Partial Failure），但是你在一个多线程代码中不会有部分故障。如果当前锁的持有者需要在锁释放前更新一系列被锁保护的数据，但是更新了一半就崩溃了，之后锁会被释放。然后你可以获得锁，然而当你查看数据的时候，只能看到垃圾数据，因为这些数据是只更新了一半的随机数据。所以，Zookeeper实现的锁，并没有提供类似于线程锁的原子性保证。
+
+- 对于这些锁的合理的场景是：Soft Lock。Soft Lock用来保护一些不太重要的数据。举个例子，当你在运行MapReduce Job时，你可以用这样的锁来确保一个Task同时只被一个Work节点执行。例如，对于Task 37，执行它的Worker需要先获得相应的锁，再执行Task，并将Task标记成执行完成，之后释放锁。MapReduce本身可以容忍Worker节点崩溃，所以如果一个Worker节点获得了锁，然后执行了一半崩溃了，之后锁会被释放，下一个获得锁的Worker会发现任务并没有完成，并重新执行任务。这不会有问题，因为这就是MapReduce定义的工作方式。所以你可以将这里的锁用在Soft Lock的场景。
+
+## 链式复制 chain replication
+- Chain Replication并不能抵御网络分区，也不能抵御脑裂。在实际场景中，这意味它不能单独使用。Chain Replication是一个有用的方案，但是它不是一个完整的复制方案。它在很多场景都有使用，但是会以一种特殊的方式来使用。总是会有一个外部的权威（External Authority）来决定谁是活的，谁挂了，并确保所有参与者都认可由哪些节点组成一条链，这样在链的组成上就不会有分歧。这个外部的权威通常称为Configuration Manager
+- 相比CR，raft更能抵抗某些服务器的瞬态减速，因为它的日志复制是多数派决定的，而不是链式决定的。
 ## Lab4 ShardedKV
