@@ -99,15 +99,16 @@
 - ZNode 有三种类型：持久节点，临时节点（客户端需要定期发送心跳）和顺序节点（节点名后面会加上一个唯一的单调递增的数字，保持唯一）。
 
 ## Zookeeper API in GO（可见zookeeper）
-- `Create`：创建一个 ZNode，可以是持久节点、临时节点或者顺序节点。
-- `Delete`：删除一个 ZNode。
-- `Exists`：检查一个 ZNode 是否存在。
-- `Get`：获取一个 ZNode 的数据。
-- `GetW`：获取一个 ZNode 的数据，并且传入chan watcher，监视 ZNode 的变化。
-- `Set`：设置一个 ZNode 的数据。
-- `Children`：获取一个 ZNode 的子节点。
+- `Create`：创建一个 ZNode，可以是持久节点、临时节点或者顺序节点。调用方式为`create(path, data, flags)`，其中`flags`参数对应上述 ZNode 的三种类型。
+- `Delete`：删除一个 ZNode。调用方式为`delete(path, version)`，其中`version`参数指定版本。
+- `Exists`：检查一个 ZNode 是否存在。调用方式为`exists(path, watch)`，其中`watch`参数指定是否监视该 ZNode 的变化。
+- `Get`：获取一个 ZNode 的数据。调用方式为`getData(path, version)`，其中`version`参数指定版本。
+- `GetW`：获取一个 ZNode 的数据，并且传入 `chan watcher`，监视 ZNode 的变化。调用方式为`getData(path, version)`，并在 `watch` 参数中传入 `chan watcher`。
+- `Set`：设置一个 ZNode 的数据。调用方式为`setData(path, data, version)`，其中`version`参数指定版本。
+- `Children`：获取一个 ZNode 的子节点。调用方式为`getChildren(path, watch)`，其中`watch`参数指定是否监视子节点的变化。
 - `Sync`：同步一个 ZNode。
 - `ACL`：访问控制列表。
+
 
 ## 非扩展锁 unscaleable locks
 - 非扩展锁是指在一个节点上加锁，这样的锁可以用于实现分布式锁，但是会受到羊群效应的影响。
