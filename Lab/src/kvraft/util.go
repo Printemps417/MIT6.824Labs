@@ -1,32 +1,28 @@
 package kvraft
 
 import (
-	"fmt"
 	"log"
 	"os"
-	"strconv"
-	"time"
 )
 
 const Debug = true
 
-var file *os.File
+var (
+	//Debug bool
+	logger *log.Logger
+)
 
 func init() {
-	f, err := os.Create("./tmp/log-" + strconv.Itoa(int(time.Now().Unix())) + ".txt")
+	file, err := os.OpenFile("log.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
-		DPrintf("log create file fail!")
-		fmt.Println("log create file fail!")
+		log.Fatalln("Failed to open log file:", err)
 	}
-	file = f
+	logger = log.New(file, "", log.LstdFlags)
 }
-func DPrintf(format string, value ...interface{}) {
-	now := time.Now()
-	info := fmt.Sprintf("%v-%v-%v %v:%v:%v:  ", now.Year(), int(now.Month()), now.Day(), now.Hour(), now.Minute(), now.Second()) + fmt.Sprintf(format+"\n", value...)
 
+func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
-		log.Printf(info)
-	} else {
-		file.WriteString(info)
+		logger.Printf(format, a...)
 	}
+	return
 }
