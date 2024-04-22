@@ -12,6 +12,7 @@ const (
 	ChangeLeaderInterval = time.Millisecond * 20
 )
 
+// 客户端
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
@@ -19,6 +20,7 @@ type Clerk struct {
 	leaderId int
 }
 
+// 用于生成一个随机数，可以生成clientId和commandId
 func nrand() int64 {
 	max := big.NewInt(int64(1) << 62)
 	bigx, _ := rand.Int(rand.Reader, max)
@@ -26,6 +28,7 @@ func nrand() int64 {
 	return x
 }
 
+// 生成一个客户端
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
@@ -44,6 +47,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
+//
 // 根据key获取value
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.

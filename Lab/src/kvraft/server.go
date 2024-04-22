@@ -26,12 +26,18 @@ type Op struct {
 	Method    string
 }
 
+type CommandResult struct {
+	Err   Err
+	Value string
+}
+
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
+	stopCh  chan struct{}
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -39,7 +45,6 @@ type KVServer struct {
 	commandNotifyCh map[int64]chan CommandResult
 	lastApplies     map[int64]int64 //k-v：ClientId-CommandId
 	data            map[string]string
-	stopCh          chan struct{}
 
 	//持久化
 	persister *raft.Persister
@@ -50,17 +55,13 @@ type KVServer struct {
 	lockMsg       string
 }
 
-type CommandResult struct {
-	Err   Err
-	Value string
-}
-
 // 自定义锁
 func (kv *KVServer) lock(msg string) {
 	kv.mu.Lock()
 	kv.lockStartTime = time.Now()
 	kv.lockMsg = msg
 }
+
 func (kv *KVServer) unlock(msg string) {
 	kv.lockEndTime = time.Now()
 	duration := kv.lockEndTime.Sub(kv.lockStartTime)
@@ -71,7 +72,49 @@ func (kv *KVServer) unlock(msg string) {
 	}
 }
 
-// Get RPC
+func (kv *KVServer) removeCh(reqId int64) {
+	kv.lock("removeCh")
+	defer kv.unlock("removeCh")
+	delete(kv.commandNotifyCh, reqId)
+}
+
+// 调用start向raft请求命令
+func (kv *KVServer) waitCmd(op Op) (res CommandResult) {
+	DPrintf("server %v wait cmd start,Op: %+v.\n", kv.me, op)
+
+	//提交命令,其实这里的start要改，一个kv数据库get命令可以发生在所有节点上
+	index, term, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		res.Err = ErrWrongLeader
+		return
+	}
+
+	kv.lock("waitCmd")
+	ch := make(chan CommandResult, 1)
+	kv.commandNotifyCh[op.ReqId] = ch
+	kv.unlock("waitCmd")
+	DPrintf("start cmd: index:%d, term:%d, op:%+v", index, term, op)
+
+	t := time.NewTimer(WaitCmdTimeOut)
+	defer t.Stop()
+	select {
+	case <-kv.stopCh:
+		DPrintf("stop ch waitCmd")
+		kv.removeCh(op.ReqId)
+		res.Err = ErrServer
+		return
+	case res = <-ch:
+		kv.removeCh(op.ReqId)
+		return
+	case <-t.C:
+		kv.removeCh(op.ReqId)
+		res.Err = ErrTimeOut
+		return
+
+	}
+}
+
+// 处理Get rpc
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	DPrintf("server %v in rpc Get,args: %+v", kv.me, args)
@@ -97,7 +140,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	DPrintf("server %v in rpc Get,args：%+v,reply：%+v", kv.me, args, reply)
 }
 
-// Put rpc
+// 处理Put rpc
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	DPrintf("server %v in rpc PutAppend,args: %+v", kv.me, args)
@@ -132,8 +175,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	// Your code here, if desired.
 	close(kv.stopCh)
+	// Your code here, if desired.
 }
 
 func (kv *KVServer) killed() bool {
@@ -299,49 +342,6 @@ func (kv *KVServer) handleApplyCh() {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-
-func (kv *KVServer) removeCh(reqId int64) {
-	kv.lock("removeCh")
-	defer kv.unlock("removeCh")
-	delete(kv.commandNotifyCh, reqId)
-}
-
-// 调用start向raft请求命令
-func (kv *KVServer) waitCmd(op Op) (res CommandResult) {
-	DPrintf("server %v wait cmd start,Op: %+v.\n", kv.me, op)
-
-	//提交命令,其实这里的start要改，一个kv数据库get命令可以发生在所有节点上
-	index, term, isLeader := kv.rf.Start(op)
-	if !isLeader {
-		res.Err = ErrWrongLeader
-		return
-	}
-
-	kv.lock("waitCmd")
-	ch := make(chan CommandResult, 1)
-	kv.commandNotifyCh[op.ReqId] = ch
-	kv.unlock("waitCmd")
-	DPrintf("start cmd: index:%d, term:%d, op:%+v", index, term, op)
-
-	t := time.NewTimer(WaitCmdTimeOut)
-	defer t.Stop()
-	select {
-	case <-kv.stopCh:
-		DPrintf("stop ch waitCmd")
-		kv.removeCh(op.ReqId)
-		res.Err = ErrServer
-		return
-	case res = <-ch:
-		kv.removeCh(op.ReqId)
-		return
-	case <-t.C:
-		kv.removeCh(op.ReqId)
-		res.Err = ErrTimeOut
-		return
-
-	}
-}
-
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
@@ -350,13 +350,21 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
 
 	// You may need initialization code here.
+	kv.lastApplies = make(map[int64]int64)
+	kv.data = make(map[string]string)
 
+	kv.stopCh = make(chan struct{})
+	//读取快照
+	kv.readPersist(true, 0, 0, kv.persister.ReadSnapshot())
+
+	kv.commandNotifyCh = make(map[int64]chan CommandResult)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-	// You may need initialization code here.
+	go kv.handleApplyCh()
 
 	return kv
 }
